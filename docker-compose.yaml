@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  cli2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cli2api
+    ports:
+      - "8000:8000"
+    environment:
+      # Server configuration
+      - CLI2API_HOST=0.0.0.0
+      - CLI2API_PORT=8000
+      - CLI2API_DEBUG=false
+
+      # Logging
+      - CLI2API_LOG_LEVEL=INFO
+      - CLI2API_LOG_JSON=true
+
+      # CLI path (mount CLI binary as volume)
+      # - CLI2API_CLAUDE_CLI_PATH=/usr/local/bin/claude
+
+      # Timeout
+      - CLI2API_DEFAULT_TIMEOUT=300
+
+      # Default model
+      - CLI2API_DEFAULT_MODEL=sonnet
+
+    # Mount CLI binary from host (if installed)
+    volumes:
+      # Example: mount Claude CLI
+      # - /opt/homebrew/bin/claude:/usr/local/bin/claude:ro
+      # Optional: mount custom config
+      # - ./.env:/app/.env:ro
+
+    # Health check using the endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    restart: unless-stopped
+
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
