@@ -20,45 +20,22 @@ Claude Code CLI is powerful but not all tools support it directly. CLI2API bridg
 
 ## Installation
 
-### Quick Start
+### Quick Start (pip)
 
 ```bash
-# Clone the repository
+pip install cli2api
+cli2api
+```
+
+Server starts at http://localhost:8000
+
+### From Source
+
+```bash
 git clone https://github.com/anoxis/CLI2API.git
 cd CLI2API
-
-# Install dependencies
 pip install -e .
-
-# Start server
-./cli2api.sh
-```
-
-### Add to PATH (Recommended)
-
-For easy access from anywhere:
-
-```bash
-# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
-export PATH="$PATH:/path/to/CLI2API"
-
-# Then run from anywhere
-cli2api.sh
-```
-
-### Running After Installation
-
-Once installed, you can start the server in several ways:
-
-```bash
-# Using the script (recommended)
-./cli2api.sh
-
-# Using Python module
-python -m cli2api
-
-# Using uvicorn directly
-uvicorn cli2api.main:app --host 0.0.0.0 --port 8000
+cli2api
 ```
 
 ### Docker
@@ -96,7 +73,7 @@ pytest tests/ -v
 
 ### Kilo Code / Roo Code
 
-1. Start CLI2API server: `./cli2api.sh`
+1. Start CLI2API server: `cli2api`
 2. Open extension settings
 3. Add custom provider:
    - **Provider Name:** `CLI2API` (or any name)
