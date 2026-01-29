@@ -332,7 +332,6 @@ class ClaudeCodeProvider:
                     continue
 
                 event_type = event.get("type", "")
-                logger.debug(f"Claude event: {event_type}")
 
                 # Handle stream_event wrapper (used with --include-partial-messages)
                 if event_type == "stream_event":
@@ -381,28 +380,24 @@ class ClaudeCodeProvider:
                     return
 
                 elif event_type == "assistant":
+                    # Process assistant event but don't duplicate content
+                    # that was already received via text_delta events
                     async for chunk in self._process_assistant_event(event, accumulated_content):
+                        # Only yield if content wasn't already streamed via text_delta
                         if chunk.content:
+                            if chunk.content in accumulated_content:
+                                # Already sent via text_delta, skip
+                                continue
                             accumulated_content += chunk.content
                         yield chunk
 
                 elif event_type == "result":
-                    logger.info(f"Result event. Accumulated: {len(accumulated_content)} chars")
                     _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
-                    if tool_calls:
-                        logger.info(f"Found {len(tool_calls)} tool calls in result")
                     yield self._create_final_chunk(tool_calls, event.get("usage"))
                     return
 
             # Stream ended - send final chunk
-            logger.info(f"Stream ended. Accumulated content length: {len(accumulated_content)}")
             _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
-            if tool_calls:
-                logger.info(f"Found {len(tool_calls)} tool calls")
-            elif tools and accumulated_content:
-                logger.warning("No tool calls found in response despite tools being provided")
-            elif not accumulated_content:
-                logger.warning("Stream ended with no content!")
 
             yield self._create_final_chunk(tool_calls)
 

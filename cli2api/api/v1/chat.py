@@ -262,6 +262,7 @@ async def stream_completion(
                             ],
                         )
                         yield sse_encode(tool_chunk.model_dump())
+                        sent_final = True
                     else:
                         # No tool_calls - send buffered content if any
                         if content_buffer:
@@ -327,11 +328,12 @@ async def stream_completion(
                     emoji in chunk.content for emoji in ["🤔", "⚡", "🔍", "📄", "🔧", "✏️"]
                 )
 
+                # When tools are provided, we need to buffer all content
+                # because tool_call JSON can arrive in fragments
                 if content_buffer is not None and not is_step:
-                    # Buffer regular content when tools are active (might be tool_call JSON)
                     content_buffer += chunk.content
                 else:
-                    # Stream step indicators and regular content immediately
+                    # Stream text content immediately
                     content_parts = split_content_chunks(chunk.content)
                     for part in content_parts:
                         content_chunk = ChatCompletionChunk(

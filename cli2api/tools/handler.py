@@ -177,7 +177,50 @@ class ToolHandler:
         tool_calls = []
         positions_to_remove = []
 
-        # First try code blocks
+        # First try direct JSON parse (raw JSON without code block)
+        stripped = content.strip()
+        if stripped.startswith('{') and stripped.endswith('}'):
+            try:
+                data = json.loads(stripped)
+
+                # Handle single tool_call
+                tool_call_data = data.get("tool_call", {})
+                if tool_call_data and "name" in tool_call_data:
+                    tool_call = {
+                        "id": cls.generate_tool_call_id(),
+                        "type": "function",
+                        "function": {
+                            "name": tool_call_data["name"],
+                            "arguments": json.dumps(
+                                tool_call_data.get("arguments", {})
+                            ),
+                        },
+                    }
+                    tool_calls.append(tool_call)
+                    return None, tool_calls  # Only tool call, no remaining content
+
+                # Handle multiple tool_calls (parallel)
+                tool_calls_data = data.get("tool_calls", [])
+                if tool_calls_data and isinstance(tool_calls_data, list):
+                    for tc_data in tool_calls_data:
+                        if tc_data and "name" in tc_data:
+                            tool_call = {
+                                "id": cls.generate_tool_call_id(),
+                                "type": "function",
+                                "function": {
+                                    "name": tc_data["name"],
+                                    "arguments": json.dumps(
+                                        tc_data.get("arguments", {})
+                                    ),
+                                },
+                            }
+                            tool_calls.append(tool_call)
+                    if tool_calls:
+                        return None, tool_calls  # Only tool calls, no remaining content
+            except (json.JSONDecodeError, TypeError, KeyError):
+                pass  # Not valid JSON, continue with other methods
+
+        # Try code blocks
         for match in cls.TOOL_CALL_PATTERN.finditer(content):
             json_str = match.group(1)
             try:
