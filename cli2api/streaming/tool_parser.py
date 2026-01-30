@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from cli2api.constants import (
+    ID_HEX_LENGTH,
+    TOOL_CALL_ID_PREFIX,
+    TOOL_CALL_START_MARKER,
+    TOOL_CALL_END_MARKER,
+)
+
 
 class ParserState(Enum):
     """Parser state machine states."""
@@ -50,13 +57,13 @@ class StreamingToolParser:
         # result.text = "", result.tool_calls = [{"id": "...", "function": {...}}]
     """
 
-    TOOL_START = "<tool_call>"
-    TOOL_END = "</tool_call>"
+    TOOL_START = TOOL_CALL_START_MARKER
+    TOOL_END = TOOL_CALL_END_MARKER
 
     def __init__(self):
         self.state = ParserState.TEXT
-        self.buffer = ""           # Buffer for tool call content
-        self.partial_marker = ""   # Buffer for partial marker detection
+        self.buffer = ""
+        self.partial_marker = ""
         self.tool_calls: list[dict] = []
 
     def reset(self):
@@ -69,7 +76,7 @@ class StreamingToolParser:
     @staticmethod
     def generate_tool_call_id() -> str:
         """Generate unique tool call ID."""
-        return f"call_{uuid.uuid4().hex[:24]}"
+        return f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}"
 
     def _parse_tool_json(self, json_str: str) -> Optional[dict]:
         """Parse tool call JSON and convert to OpenAI format."""
@@ -367,7 +374,7 @@ class LegacyToolParser:
             tc_data = data["tool_call"]
             if "name" in tc_data:
                 tool_calls.append({
-                    "id": f"call_{uuid.uuid4().hex[:24]}",
+                    "id": f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}",
                     "type": "function",
                     "function": {
                         "name": tc_data["name"],
@@ -380,7 +387,7 @@ class LegacyToolParser:
             for tc_data in data["tool_calls"]:
                 if "name" in tc_data:
                     tool_calls.append({
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                        "id": f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}",
                         "type": "function",
                         "function": {
                             "name": tc_data["name"],

@@ -5,6 +5,13 @@ import re
 import uuid
 from typing import Any, Optional
 
+from cli2api.constants import (
+    ID_HEX_LENGTH,
+    TOOL_CALL_ID_PREFIX,
+    TOOL_CALL_START_MARKER,
+    TOOL_CALL_END_MARKER,
+)
+
 
 class ToolHandler:
     """Handler for prompt-based tool calling.
@@ -18,7 +25,7 @@ class ToolHandler:
 
     # Pattern to match <tool_call>...</tool_call> markers
     MARKER_TOOL_CALL_PATTERN = re.compile(
-        r'<tool_call>\s*(.*?)\s*</tool_call>',
+        rf'{re.escape(TOOL_CALL_START_MARKER)}\s*(.*?)\s*{re.escape(TOOL_CALL_END_MARKER)}',
         re.DOTALL,
     )
 
@@ -131,7 +138,7 @@ class ToolHandler:
         Returns:
             Tool call ID in format "call_<hex>".
         """
-        return f"call_{uuid.uuid4().hex[:24]}"
+        return f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}"
 
     @classmethod
     def _extract_json_objects(cls, content: str) -> list[tuple[int, int, str]]:

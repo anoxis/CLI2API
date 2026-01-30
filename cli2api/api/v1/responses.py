@@ -14,9 +14,13 @@ from pydantic import BaseModel, ConfigDict
 
 from cli2api.api.dependencies import get_provider
 from cli2api.api.utils import parse_model_name
+from cli2api.constants import ID_HEX_LENGTH, MESSAGE_ID_PREFIX, RESPONSE_ID_PREFIX
 from cli2api.providers.claude import ClaudeCodeProvider
 from cli2api.schemas.openai import ChatMessage
 from cli2api.streaming.sse import sse_encode, sse_error
+from cli2api.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -121,7 +125,7 @@ async def create_response(
 
     # Convert to chat messages
     messages = convert_to_chat_messages(request)
-    response_id = f"resp-{uuid.uuid4().hex[:24]}"
+    response_id = f"{RESPONSE_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}"
 
     if request.stream:
         return StreamingResponse(
@@ -150,7 +154,7 @@ async def create_response(
         except RuntimeError as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        output_id = f"msg-{uuid.uuid4().hex[:24]}"
+        output_id = f"{MESSAGE_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}"
 
         return ResponsesResponse(
             id=response_id,
@@ -174,7 +178,7 @@ async def stream_response(
 ) -> AsyncIterator[str]:
     """Generate SSE events for streaming response."""
     created = int(time.time())
-    output_id = f"msg-{uuid.uuid4().hex[:24]}"
+    output_id = f"{MESSAGE_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}"
     content_buffer = ""
 
     try:
@@ -248,8 +252,14 @@ async def stream_response(
             }
         })
 
+        logger.info(f"[{response_id}] Stream completed successfully")
         yield "data: [DONE]\n\n"
 
+    except RuntimeError as e:
+        logger.error(f"[{response_id}] Provider error: {e}")
+        yield sse_error(str(e))
+        yield "data: [DONE]\n\n"
     except Exception as e:
+        logger.error(f"[{response_id}] Stream error: {e}")
         yield sse_error(str(e))
         yield "data: [DONE]\n\n"

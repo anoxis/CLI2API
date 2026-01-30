@@ -3,8 +3,18 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
+from cli2api.constants import (
+    BASH_COMMAND_PREVIEW_LENGTH,
+    GREP_PATTERN_PREVIEW_LENGTH,
+    STEP_EMOJI_BASH,
+    STEP_EMOJI_DEFAULT,
+    STEP_EMOJI_EDIT,
+    STEP_EMOJI_GREP,
+    STEP_EMOJI_READ,
+    STEP_EMOJI_TASK,
+)
 from cli2api.schemas.internal import ProviderChunk, ProviderResult
 from cli2api.schemas.openai import ChatMessage
 from cli2api.streaming.tool_parser import StreamingToolParser
@@ -56,33 +66,64 @@ def _format_tool_result(tool_call_id: Optional[str], content: Optional[str]) -> 
     return f"[Tool Result for {tc_id}]\n{result}"
 
 
-def _format_step_indicator(tool_name: str, tool_input: dict) -> Optional[str]:
-    """Format step indicator for tool use."""
-    step_text = None
+def _format_bash_step(tool_input: dict) -> str:
+    """Format Bash command step indicator."""
+    cmd = tool_input.get("command", "")
+    if not cmd:
+        return f"`{STEP_EMOJI_BASH} Bash`\n"
+    truncated = cmd[:BASH_COMMAND_PREVIEW_LENGTH]
+    suffix = "..." if len(cmd) > BASH_COMMAND_PREVIEW_LENGTH else ""
+    return f"`{STEP_EMOJI_BASH} {truncated}{suffix}`\n"
 
-    if tool_name == "Bash":
-        cmd = tool_input.get("command", "")
-        if cmd:
-            step_text = f"`⚡ {cmd[:60]}{'...' if len(cmd) > 60 else ''}`\n"
-    elif tool_name in ("Read", "Glob"):
-        path = tool_input.get("file_path", tool_input.get("pattern", ""))
-        step_text = f"`📄 {tool_name}: {path}`\n"
-    elif tool_name == "Grep":
-        pattern = tool_input.get("pattern", "")
-        if pattern:
-            step_text = f"`🔍 {tool_name}: {pattern[:40]}...`\n"
-        else:
-            step_text = f"`🔍 {tool_name}`\n"
-    elif tool_name in ("Edit", "Write"):
-        path = tool_input.get("file_path", "")
-        step_text = f"`✏️ {tool_name}: {path}`\n"
-    elif tool_name == "Task":
-        desc = tool_input.get("description", "")
-        step_text = f"`🔧 {desc}`\n" if desc else f"`🔧 Task`\n"
-    else:
-        step_text = f"`🔧 {tool_name}`\n"
 
-    return step_text
+def _format_file_step(tool_name: str, tool_input: dict) -> str:
+    """Format file operation step indicator (Read, Glob, Edit, Write)."""
+    path = tool_input.get("file_path", tool_input.get("pattern", ""))
+    emoji = STEP_EMOJI_EDIT if tool_name in ("Edit", "Write") else STEP_EMOJI_READ
+    return f"`{emoji} {tool_name}: {path}`\n"
+
+
+def _format_grep_step(tool_input: dict) -> str:
+    """Format Grep step indicator."""
+    pattern = tool_input.get("pattern", "")
+    if pattern:
+        truncated = pattern[:GREP_PATTERN_PREVIEW_LENGTH]
+        return f"`{STEP_EMOJI_GREP} Grep: {truncated}...`\n"
+    return f"`{STEP_EMOJI_GREP} Grep`\n"
+
+
+def _format_task_step(tool_input: dict) -> str:
+    """Format Task step indicator."""
+    desc = tool_input.get("description", "")
+    return f"`{STEP_EMOJI_TASK} {desc}`\n" if desc else f"`{STEP_EMOJI_TASK} Task`\n"
+
+
+# Dispatch table for step indicator formatting
+_STEP_FORMATTERS: dict[str, Callable[[dict], str]] = {
+    "Bash": _format_bash_step,
+    "Grep": _format_grep_step,
+    "Task": _format_task_step,
+}
+
+# Tools that use file path formatting
+_FILE_TOOLS = {"Read", "Glob", "Edit", "Write"}
+
+
+def _format_step_indicator(tool_name: str, tool_input: dict) -> str:
+    """Format step indicator for tool use.
+
+    Uses dispatch table for specific tools, falls back to default format.
+    """
+    # Check dispatch table first
+    if tool_name in _STEP_FORMATTERS:
+        return _STEP_FORMATTERS[tool_name](tool_input)
+
+    # File-based tools
+    if tool_name in _FILE_TOOLS:
+        return _format_file_step(tool_name, tool_input)
+
+    # Default format
+    return f"`{STEP_EMOJI_DEFAULT} {tool_name}`\n"
 
 
 # ==================== Claude Code Provider ====================
