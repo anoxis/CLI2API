@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Optional
 
 from cli2api.schemas.internal import ProviderChunk, ProviderResult
 from cli2api.schemas.openai import ChatMessage
+from cli2api.streaming.tool_parser import StreamingToolParser
 from cli2api.tools.handler import ToolHandler
 from cli2api.utils.logging import get_logger
 
@@ -307,7 +308,13 @@ class ClaudeCodeProvider:
         tools: Optional[list[dict]] = None,
         **kwargs,
     ) -> AsyncIterator[ProviderChunk]:
-        """Stream output from Claude CLI."""
+        """Stream output from Claude CLI.
+
+        When tools are provided, uses StreamingToolParser to:
+        - Stream text immediately (no buffering)
+        - Parse tool_calls on-the-fly using <tool_call> markers
+        - Strip markers from output
+        """
         if tools:
             logger.info(f"Injecting {len(tools)} tools into messages")
             messages = ToolHandler.inject_tools_into_messages(messages, tools)
@@ -316,7 +323,10 @@ class ClaudeCodeProvider:
         logger.info(f"Claude stream: model={model}, prompt_len={len(cmd[2])}")
 
         proc = await self._create_stream_process(cmd)
-        accumulated_content = ""
+
+        # Use streaming parser when tools are provided
+        tool_parser = StreamingToolParser() if tools else None
+        accumulated_content = ""  # For fallback parsing
 
         try:
             async for line in proc.stdout:
@@ -327,8 +337,13 @@ class ClaudeCodeProvider:
                 event = self._parse_json_line(line)
                 if event is None:
                     # Non-JSON line, treat as plain text
+                    if tool_parser:
+                        result = tool_parser.feed(line)
+                        if result.text:
+                            yield ProviderChunk(content=result.text)
+                    elif line:
+                        yield ProviderChunk(content=line)
                     accumulated_content += line
-                    yield ProviderChunk(content=line)
                     continue
 
                 event_type = event.get("type", "")
@@ -345,7 +360,15 @@ class ClaudeCodeProvider:
                         if delta_type == "text_delta":
                             text = delta.get("text", "")
                             accumulated_content += text
-                            yield ProviderChunk(content=text)
+
+                            if tool_parser:
+                                # Parse on-the-fly, stream only non-marker text
+                                result = tool_parser.feed(text)
+                                if result.text:
+                                    yield ProviderChunk(content=result.text)
+                            elif text:
+                                yield ProviderChunk(content=text)
+
                         elif delta_type == "thinking_delta":
                             thinking = delta.get("thinking", "")
                             if thinking:
@@ -354,7 +377,16 @@ class ClaudeCodeProvider:
                     elif inner_type == "message_delta":
                         delta = inner_event.get("delta", {})
                         if delta.get("stop_reason"):
-                            _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
+                            # Finalize tool parser
+                            if tool_parser:
+                                final_result = tool_parser.finalize()
+                                if final_result.text:
+                                    yield ProviderChunk(content=final_result.text)
+                                tool_calls = tool_parser.get_all_tool_calls()
+                            else:
+                                _, tool_calls = self._handle_tool_calls_in_content(
+                                    accumulated_content, tools
+                                )
                             yield self._create_final_chunk(tool_calls, inner_event.get("usage"))
                             return
 
@@ -368,14 +400,29 @@ class ClaudeCodeProvider:
                     if delta_type == "text_delta":
                         text = delta.get("text", "")
                         accumulated_content += text
-                        yield ProviderChunk(content=text)
+
+                        if tool_parser:
+                            result = tool_parser.feed(text)
+                            if result.text:
+                                yield ProviderChunk(content=result.text)
+                        elif text:
+                            yield ProviderChunk(content=text)
+
                     elif delta_type == "thinking_delta":
                         thinking = delta.get("thinking", "")
                         if thinking:
                             yield ProviderChunk(content="", reasoning=thinking)
 
                 elif event_type == "message_delta":
-                    _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
+                    if tool_parser:
+                        final_result = tool_parser.finalize()
+                        if final_result.text:
+                            yield ProviderChunk(content=final_result.text)
+                        tool_calls = tool_parser.get_all_tool_calls()
+                    else:
+                        _, tool_calls = self._handle_tool_calls_in_content(
+                            accumulated_content, tools
+                        )
                     yield self._create_final_chunk(tool_calls, event.get("usage"))
                     return
 
@@ -389,15 +436,37 @@ class ClaudeCodeProvider:
                                 # Already sent via text_delta, skip
                                 continue
                             accumulated_content += chunk.content
-                        yield chunk
+
+                            if tool_parser:
+                                result = tool_parser.feed(chunk.content)
+                                if result.text:
+                                    yield ProviderChunk(content=result.text)
+                            elif chunk.content:
+                                yield chunk
+                        else:
+                            yield chunk
 
                 elif event_type == "result":
-                    _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
+                    if tool_parser:
+                        final_result = tool_parser.finalize()
+                        if final_result.text:
+                            yield ProviderChunk(content=final_result.text)
+                        tool_calls = tool_parser.get_all_tool_calls()
+                    else:
+                        _, tool_calls = self._handle_tool_calls_in_content(
+                            accumulated_content, tools
+                        )
                     yield self._create_final_chunk(tool_calls, event.get("usage"))
                     return
 
             # Stream ended - send final chunk
-            _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
+            if tool_parser:
+                final_result = tool_parser.finalize()
+                if final_result.text:
+                    yield ProviderChunk(content=final_result.text)
+                tool_calls = tool_parser.get_all_tool_calls()
+            else:
+                _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
 
             yield self._create_final_chunk(tool_calls)
 

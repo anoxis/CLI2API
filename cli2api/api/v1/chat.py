@@ -218,24 +218,16 @@ async def stream_completion(
         )
         yield sse_encode(first_chunk.model_dump())
 
-        # When tools are provided, buffer content to check for tool_calls before sending
-        content_buffer = "" if tools else None
-
         # Stream content chunks
+        # Note: tool_calls are now parsed on-the-fly in execute_stream
+        # using StreamingToolParser, so we can stream text immediately
         async for chunk in provider.execute_stream(
             messages=messages, model=model, tools=tools, reasoning_effort=reasoning_effort
         ):
             if chunk.is_final:
                 if not sent_final:
-                    # Check for tool_calls in chunk or buffered content
+                    # Check for tool_calls in chunk
                     tool_calls_data = chunk.tool_calls
-
-                    # If we buffered content, check it for tool_calls
-                    if content_buffer and not tool_calls_data:
-                        from cli2api.tools.handler import ToolHandler
-                        _, parsed_tools = ToolHandler.parse_tool_calls(content_buffer)
-                        if parsed_tools:
-                            tool_calls_data = parsed_tools
 
                     if tool_calls_data:
                         tool_calls = [
@@ -264,24 +256,6 @@ async def stream_completion(
                         yield sse_encode(tool_chunk.model_dump())
                         sent_final = True
                     else:
-                        # No tool_calls - send buffered content if any
-                        if content_buffer:
-                            content_parts = split_content_chunks(content_buffer)
-                            for part in content_parts:
-                                content_chunk = ChatCompletionChunk(
-                                    id=completion_id,
-                                    created=created,
-                                    model=model,
-                                    choices=[
-                                        StreamChoice(
-                                            index=0,
-                                            delta=DeltaContent(content=part),
-                                            finish_reason=None,
-                                        )
-                                    ],
-                                )
-                                yield sse_encode(content_chunk.model_dump())
-
                         # Normal final chunk
                         final_chunk = ChatCompletionChunk(
                             id=completion_id,
@@ -323,19 +297,11 @@ async def stream_completion(
                 yield sse_encode(reasoning_chunk.model_dump())
 
             elif chunk.content:
-                # Check if this is a step indicator (should be streamed immediately)
-                is_step = chunk.content.startswith("`") and any(
-                    emoji in chunk.content for emoji in ["🤔", "⚡", "🔍", "📄", "🔧", "✏️"]
-                )
-
-                # When tools are provided, we need to buffer all content
-                # because tool_call JSON can arrive in fragments
-                if content_buffer is not None and not is_step:
-                    content_buffer += chunk.content
-                else:
-                    # Stream text content immediately
-                    content_parts = split_content_chunks(chunk.content)
-                    for part in content_parts:
+                # Stream text content immediately
+                # Tool call markers are already stripped by StreamingToolParser
+                content_parts = split_content_chunks(chunk.content)
+                for part in content_parts:
+                    if part:  # Only skip completely empty strings
                         content_chunk = ChatCompletionChunk(
                             id=completion_id,
                             created=created,

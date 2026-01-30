@@ -16,6 +16,12 @@ class ToolHandler:
     3. Parse the response to extract tool calls
     """
 
+    # Pattern to match <tool_call>...</tool_call> markers
+    MARKER_TOOL_CALL_PATTERN = re.compile(
+        r'<tool_call>\s*(.*?)\s*</tool_call>',
+        re.DOTALL,
+    )
+
     # Pattern to match JSON tool calls in code blocks (single or multiple)
     TOOL_CALL_PATTERN = re.compile(
         r'```(?:json)?\s*\n?\s*(\{[^`]*?"tool_calls?"[^`]*?\})\s*\n?\s*```',
@@ -82,22 +88,39 @@ class ToolHandler:
         lines.append("\n---")
         lines.append("RESPONSE FORMAT:")
         lines.append("")
-        lines.append("Output JSON describing tool calls. Do NOT execute or imagine results.")
+        lines.append("When calling tools, wrap EACH tool call in <tool_call> tags.")
+        lines.append("You may include explanatory text before or after the tags.")
         lines.append("")
         lines.append("For a SINGLE tool call:")
-        lines.append('{"tool_call": {"name": "TOOL_NAME", "arguments": {...}}}')
+        lines.append("<tool_call>")
+        lines.append('{"name": "TOOL_NAME", "arguments": {...}}')
+        lines.append("</tool_call>")
         lines.append("")
-        lines.append("For MULTIPLE PARALLEL tool calls (ALWAYS use when reading 2+ files):")
-        lines.append('{"tool_calls": [{"name": "read_file", "arguments": {"path": "file1.py"}}, {"name": "read_file", "arguments": {"path": "file2.py"}}]}')
+        lines.append("For MULTIPLE tool calls, use SEPARATE tags for each:")
+        lines.append("<tool_call>")
+        lines.append('{"name": "read_file", "arguments": {"path": "file1.py"}}')
+        lines.append("</tool_call>")
+        lines.append("<tool_call>")
+        lines.append('{"name": "read_file", "arguments": {"path": "file2.py"}}')
+        lines.append("</tool_call>")
         lines.append("")
         lines.append("CRITICAL RULES:")
-        lines.append("- When you need to read multiple files, ALWAYS use tool_calls array with ALL files in ONE response")
-        lines.append("- NEVER read files one by one - batch them into a single tool_calls array")
-        lines.append("- Example: need to read 3 files? Return ONE response with tool_calls containing all 3 read_file calls")
-        lines.append("- If user wants to read a file -> call read_file, NOT attempt_completion")
-        lines.append("- If user wants to list files -> call list_files, NOT attempt_completion")
-        lines.append("- Only use attempt_completion for final text responses AFTER gathering information")
-        lines.append("- Print ONLY the JSON, no other text")
+        lines.append("- ALWAYS wrap tool calls in <tool_call>...</tool_call> tags")
+        lines.append("- Each tool call must be in its own tag pair")
+        lines.append("- When reading multiple files, include multiple <tool_call> tags")
+        lines.append("- You CAN include text explanation before/after tags")
+        lines.append("- Do NOT execute tools yourself - just output the tags")
+        lines.append("- If user wants to read a file -> use read_file tool")
+        lines.append("- If user wants to list files -> use list_files tool")
+        lines.append("- ALWAYS include ALL required parameters for each tool")
+        lines.append("")
+        lines.append("ATTEMPT_COMPLETION USAGE:")
+        lines.append("When using attempt_completion, ALWAYS include the 'result' parameter:")
+        lines.append("<tool_call>")
+        lines.append('{"name": "attempt_completion", "arguments": {"result": "Your response text here"}}')
+        lines.append("</tool_call>")
+        lines.append("- The 'result' parameter is REQUIRED and must contain your final response")
+        lines.append("- Use attempt_completion ONLY after you have gathered all needed information")
 
         return "\n".join(lines)
 
@@ -177,7 +200,39 @@ class ToolHandler:
         tool_calls = []
         positions_to_remove = []
 
-        # First try direct JSON parse (raw JSON without code block)
+        # First try marker-based format: <tool_call>...</tool_call>
+        for match in cls.MARKER_TOOL_CALL_PATTERN.finditer(content):
+            json_str = match.group(1).strip()
+            try:
+                data = json.loads(json_str)
+
+                # Support both {"name": ...} and {"tool_call": {"name": ...}}
+                if "tool_call" in data:
+                    data = data["tool_call"]
+
+                if "name" in data:
+                    tool_call = {
+                        "id": cls.generate_tool_call_id(),
+                        "type": "function",
+                        "function": {
+                            "name": data["name"],
+                            "arguments": json.dumps(data.get("arguments", {})),
+                        },
+                    }
+                    tool_calls.append(tool_call)
+                    positions_to_remove.append((match.start(), match.end()))
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+
+        # If we found marker-based tool calls, return early
+        if tool_calls:
+            remaining = content
+            for start, end in sorted(positions_to_remove, reverse=True):
+                remaining = remaining[:start] + remaining[end:]
+            remaining = remaining.strip()
+            return remaining if remaining else None, tool_calls
+
+        # Fallback: try direct JSON parse (raw JSON without code block)
         stripped = content.strip()
         if stripped.startswith('{') and stripped.endswith('}'):
             try:
