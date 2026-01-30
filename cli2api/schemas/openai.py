@@ -153,8 +153,9 @@ class ReasoningDetail(BaseModel):
 class DeltaContent(BaseModel):
     role: Optional[Literal["assistant"]] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None  # vLLM/DeepSeek/LiteLLM format
     tool_calls: Optional[list[ToolCall]] = None
-    reasoning_details: Optional[list[ReasoningDetail]] = None
+    reasoning_details: Optional[list[ReasoningDetail]] = None  # OpenAI format
 
     def model_dump(self, **kwargs):
         """Exclude None values by default for cleaner responses."""

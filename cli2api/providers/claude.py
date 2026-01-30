@@ -3,18 +3,8 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Optional
 
-from cli2api.constants import (
-    BASH_COMMAND_PREVIEW_LENGTH,
-    GREP_PATTERN_PREVIEW_LENGTH,
-    STEP_EMOJI_BASH,
-    STEP_EMOJI_DEFAULT,
-    STEP_EMOJI_EDIT,
-    STEP_EMOJI_GREP,
-    STEP_EMOJI_READ,
-    STEP_EMOJI_TASK,
-)
 from cli2api.schemas.internal import ProviderChunk, ProviderResult
 from cli2api.schemas.openai import ChatMessage
 from cli2api.streaming.tool_parser import StreamingToolParser
@@ -64,53 +54,6 @@ def _format_tool_result(tool_call_id: Optional[str], content: Optional[str]) -> 
     tc_id = tool_call_id or "unknown"
     result = content or ""
     return f"[Tool Result for {tc_id}]\n{result}"
-
-
-def _format_bash_step(tool_input: dict) -> str:
-    cmd = tool_input.get("command", "")
-    if not cmd:
-        return f"`{STEP_EMOJI_BASH} Bash`\n"
-    truncated = cmd[:BASH_COMMAND_PREVIEW_LENGTH]
-    suffix = "..." if len(cmd) > BASH_COMMAND_PREVIEW_LENGTH else ""
-    return f"`{STEP_EMOJI_BASH} {truncated}{suffix}`\n"
-
-
-def _format_file_step(tool_name: str, tool_input: dict) -> str:
-    path = tool_input.get("file_path", tool_input.get("pattern", ""))
-    emoji = STEP_EMOJI_EDIT if tool_name in ("Edit", "Write") else STEP_EMOJI_READ
-    return f"`{emoji} {tool_name}: {path}`\n"
-
-
-def _format_grep_step(tool_input: dict) -> str:
-    pattern = tool_input.get("pattern", "")
-    if pattern:
-        truncated = pattern[:GREP_PATTERN_PREVIEW_LENGTH]
-        return f"`{STEP_EMOJI_GREP} Grep: {truncated}...`\n"
-    return f"`{STEP_EMOJI_GREP} Grep`\n"
-
-
-def _format_task_step(tool_input: dict) -> str:
-    desc = tool_input.get("description", "")
-    return f"`{STEP_EMOJI_TASK} {desc}`\n" if desc else f"`{STEP_EMOJI_TASK} Task`\n"
-
-
-_STEP_FORMATTERS: dict[str, Callable[[dict], str]] = {
-    "Bash": _format_bash_step,
-    "Grep": _format_grep_step,
-    "Task": _format_task_step,
-}
-
-_FILE_TOOLS = {"Read", "Glob", "Edit", "Write"}
-
-
-def _format_step_indicator(tool_name: str, tool_input: dict) -> str:
-    if tool_name in _STEP_FORMATTERS:
-        return _STEP_FORMATTERS[tool_name](tool_input)
-
-    if tool_name in _FILE_TOOLS:
-        return _format_file_step(tool_name, tool_input)
-
-    return f"`{STEP_EMOJI_DEFAULT} {tool_name}`\n"
 
 
 # ==================== Claude Code Provider ====================
@@ -294,6 +237,28 @@ class ClaudeCodeProvider:
             usage=usage,
         )
 
+    def _extract_native_tool_call(self, block: dict) -> Optional[dict]:
+        """Extract tool call from Claude native tool_use block."""
+        import json
+        import uuid
+        from cli2api.constants import ID_HEX_LENGTH, TOOL_CALL_ID_PREFIX
+
+        tool_name = block.get("name")
+        tool_input = block.get("input", {})
+        tool_id = block.get("id", f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}")
+
+        if not tool_name:
+            return None
+
+        return {
+            "id": tool_id,
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input),
+            },
+        }
+
     # ==================== Execute Methods ====================
 
     async def execute(
@@ -358,6 +323,7 @@ class ClaudeCodeProvider:
 
         tool_parser = StreamingToolParser() if tools else None
         accumulated_content = ""
+        native_tool_calls: list[dict] = []  # For Opus native tool calling
 
         try:
             async for line in proc.stdout:
@@ -378,18 +344,22 @@ class ClaudeCodeProvider:
                     continue
 
                 event_type = event.get("type", "")
+                logger.debug(f"[STREAM] event_type={event_type}, keys={list(event.keys())}")
 
                 # Handle stream_event wrapper (used with --include-partial-messages)
                 if event_type == "stream_event":
                     inner_event = event.get("event", {})
                     inner_type = inner_event.get("type", "")
+                    logger.debug(f"[STREAM] stream_event inner_type={inner_type}")
 
                     if inner_type == "content_block_delta":
                         delta = inner_event.get("delta", {})
                         delta_type = delta.get("type", "")
+                        logger.info(f"[STREAM] delta_type={delta_type}, delta_keys={list(delta.keys())}")
 
                         if delta_type == "text_delta":
                             text = delta.get("text", "")
+                            logger.info(f"[STREAM] text_delta: {text[:100]}..." if len(text) > 100 else f"[STREAM] text_delta: {text}")
                             accumulated_content += text
 
                             if tool_parser:
@@ -402,14 +372,27 @@ class ClaudeCodeProvider:
 
                         elif delta_type == "thinking_delta":
                             thinking = delta.get("thinking", "")
+                            logger.info(f"[STREAM] THINKING: {thinking[:100]}..." if len(thinking) > 100 else f"[STREAM] THINKING: {thinking}")
                             if thinking:
                                 yield ProviderChunk(content="", reasoning=thinking)
 
+                        elif delta_type == "input_json_delta":
+                            # Native tool calling (Opus) - accumulate JSON
+                            partial_json = delta.get("partial_json", "")
+                            logger.info(f"[STREAM] input_json_delta: {partial_json[:50]}...")
+                            accumulated_content += partial_json
+
                     elif inner_type == "message_delta":
+                        logger.info(f"[STREAM] message_delta: {inner_event.get('delta', {})}")
                         delta = inner_event.get("delta", {})
-                        if delta.get("stop_reason"):
-                            # Finalize tool parser
-                            if tool_parser:
+                        stop_reason = delta.get("stop_reason")
+                        if stop_reason:
+                            tool_calls = None
+                            # Native tool calling (stop_reason=tool_use)
+                            if stop_reason == "tool_use":
+                                tool_calls = native_tool_calls if native_tool_calls else None
+                                logger.info(f"[STREAM] Native tool_calls: {len(tool_calls) if tool_calls else 0}")
+                            elif tool_parser:
                                 final_result = tool_parser.finalize()
                                 if final_result.text:
                                     yield ProviderChunk(content=final_result.text)
@@ -458,8 +441,18 @@ class ClaudeCodeProvider:
                     return
 
                 elif event_type == "assistant":
-                    # Process assistant event but don't duplicate content
-                    # that was already received via text_delta events
+                    logger.info(f"[STREAM] ASSISTANT event, message keys: {list(event.get('message', {}).keys())}")
+                    content_blocks = event.get("message", {}).get("content", [])
+                    for i, block in enumerate(content_blocks):
+                        if isinstance(block, dict):
+                            block_type = block.get("type")
+                            logger.info(f"[STREAM] ASSISTANT block[{i}] type={block_type}")
+                            # Extract native tool calls
+                            if block_type == "tool_use":
+                                tool_call = self._extract_native_tool_call(block)
+                                if tool_call:
+                                    native_tool_calls.append(tool_call)
+                                    logger.info(f"[STREAM] Extracted native tool_call: {tool_call.get('function', {}).get('name')}")
                     async for chunk in self._process_assistant_event(event, accumulated_content):
                         # Only yield if content wasn't already streamed via text_delta
                         if chunk.content:
@@ -528,8 +521,5 @@ class ClaudeCodeProvider:
                     yield ProviderChunk(content=text)
 
             elif block_type == "tool_use":
-                tool_name = block.get("name", "")
-                tool_input = block.get("input", {})
-                step_text = _format_step_indicator(tool_name, tool_input)
-                if step_text:
-                    yield ProviderChunk(content=step_text)
+                # Native tool calls are extracted separately, no need to show in content
+                pass

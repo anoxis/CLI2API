@@ -20,7 +20,6 @@ from cli2api.schemas.openai import (
     ChatCompletionResponse,
     ChatMessage,
     DeltaContent,
-    ReasoningDetail,
     ResponseMessage,
     StreamChoice,
     ToolCall,
@@ -152,9 +151,8 @@ def _create_reasoning_chunk(
             StreamChoice(
                 index=0,
                 delta=DeltaContent(
-                    reasoning_details=[
-                        ReasoningDetail(type="reasoning.text", text=reasoning_text)
-                    ]
+                    reasoning_content=reasoning_text,
+                    content=reasoning_text,  # Also in content for <think> block
                 ),
                 finish_reason=None,
             )
@@ -239,6 +237,7 @@ class CompletionService:
         """Generate SSE events for a streaming completion."""
         created = int(time.time())
         sent_final = False
+        in_thinking = False  # Track if we're inside <think> block
 
         logger.info(f"[{completion_id}] Starting stream for model={model}")
 
@@ -249,6 +248,13 @@ class CompletionService:
                 messages=messages, model=model, tools=tools, reasoning_effort=reasoning_effort
             ):
                 if chunk.is_final:
+                    # Close thinking block if still open
+                    if in_thinking:
+                        yield sse_encode(
+                            _create_content_chunk(completion_id, created, model, "</think>\n").model_dump()
+                        )
+                        in_thinking = False
+
                     sent_final = True
                     if chunk.tool_calls:
                         tool_calls = convert_tool_calls(chunk.tool_calls)
@@ -261,11 +267,25 @@ class CompletionService:
                         )
 
                 elif chunk.reasoning:
+                    logger.info(f"[{completion_id}] Reasoning chunk: {chunk.reasoning[:100]}...")
+                    if not in_thinking:
+                        yield sse_encode(
+                            _create_content_chunk(completion_id, created, model, "<think>").model_dump()
+                        )
+                        in_thinking = True
+
                     yield sse_encode(
                         _create_reasoning_chunk(completion_id, created, model, chunk.reasoning).model_dump()
                     )
 
                 elif chunk.content:
+                    # Close thinking block before content
+                    if in_thinking:
+                        yield sse_encode(
+                            _create_content_chunk(completion_id, created, model, "</think>\n").model_dump()
+                        )
+                        in_thinking = False
+
                     for part in split_content_chunks(chunk.content):
                         if part:
                             yield sse_encode(

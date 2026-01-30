@@ -31,24 +31,6 @@ CHUNK_SPLIT_SEPARATORS = (" ", "\n", ".", ",", ";")
 CHUNK_SPLIT_MIN_RATIO = 0.5
 
 # ====================
-# Tool Formatting
-# ====================
-
-# Maximum length for command preview in step indicators
-BASH_COMMAND_PREVIEW_LENGTH = 60
-
-# Maximum length for grep pattern preview
-GREP_PATTERN_PREVIEW_LENGTH = 40
-
-# Step indicator emojis
-STEP_EMOJI_BASH = "⚡"
-STEP_EMOJI_READ = "📄"
-STEP_EMOJI_GREP = "🔍"
-STEP_EMOJI_EDIT = "✏️"
-STEP_EMOJI_TASK = "🔧"
-STEP_EMOJI_DEFAULT = "🔧"
-
-# ====================
 # HTTP Status Codes
 # ====================
 
