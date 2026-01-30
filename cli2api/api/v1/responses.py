@@ -29,8 +29,6 @@ router = APIRouter()
 
 
 class ResponsesInputMessage(BaseModel):
-    """Input message for Responses API."""
-
     model_config = ConfigDict(extra="ignore")
 
     role: str
@@ -68,8 +66,6 @@ class ResponsesRequest(BaseModel):
 
 
 class ResponsesOutput(BaseModel):
-    """Output content in response."""
-
     type: str = "message"
     id: str
     role: str = "assistant"
@@ -77,8 +73,6 @@ class ResponsesOutput(BaseModel):
 
 
 class ResponsesResponse(BaseModel):
-    """Response body for /v1/responses."""
-
     id: str
     object: str = "response"
     created_at: int

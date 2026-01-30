@@ -51,21 +51,17 @@ class ToolHandler:
     3. Parse the response to extract tool calls
     """
 
-    # Pattern to match <tool_call>...</tool_call> markers
     MARKER_TOOL_CALL_PATTERN = re.compile(
         rf'{re.escape(TOOL_CALL_START_MARKER)}\s*(.*?)\s*{re.escape(TOOL_CALL_END_MARKER)}',
         re.DOTALL,
     )
 
-    # Pattern to match JSON tool calls in code blocks (single or multiple)
     TOOL_CALL_PATTERN = re.compile(
         r'```(?:json)?\s*\n?\s*(\{[^`]*?"tool_calls?"[^`]*?\})\s*\n?\s*```',
         re.DOTALL | re.IGNORECASE,
     )
 
-    # Pattern to match Kilo Code style tool calls:
-    # [Tool Call: name({...})]
-    # [Tool Call: name({...}) id=call_xxx]
+    # Kilo Code format: [Tool Call: name({...}) id=call_xxx]
     KILO_TOOL_CALL_PATTERN = re.compile(
         r'\[Tool Call:\s*(\w+)\s*\((\{.*?\})\)(?:\s*id=\S+)?\s*\]',
         re.DOTALL,
@@ -112,12 +108,11 @@ class ToolHandler:
 
             if properties:
                 lines.append("Parameters:")
-                for param_name, param_info in properties.items():
-                    param_type = param_info.get("type", "any")
-                    param_desc = param_info.get("description", "")
-                    is_required = param_name in required
-                    req_marker = " (required)" if is_required else " (optional)"
-                    lines.append(f"- {param_name} ({param_type}{req_marker}): {param_desc}")
+                for pname, pinfo in properties.items():
+                    ptype = pinfo.get("type", "any")
+                    pdesc = pinfo.get("description", "")
+                    req = " (required)" if pname in required else " (optional)"
+                    lines.append(f"- {pname} ({ptype}{req}): {pdesc}")
                 lines.append("")
 
         lines.append("\n---")
@@ -273,7 +268,6 @@ class ToolHandler:
             try:
                 data = json.loads(stripped)
 
-                # Handle single tool_call
                 tool_call_data = data.get("tool_call", {})
                 if tool_call_data and "name" in tool_call_data:
                     tool_call = {
@@ -287,9 +281,8 @@ class ToolHandler:
                         },
                     }
                     tool_calls.append(tool_call)
-                    return None, tool_calls  # Only tool call, no remaining content
+                    return None, tool_calls
 
-                # Handle multiple tool_calls (parallel)
                 tool_calls_data = data.get("tool_calls", [])
                 if tool_calls_data and isinstance(tool_calls_data, list):
                     for tc_data in tool_calls_data:
@@ -306,17 +299,16 @@ class ToolHandler:
                             }
                             tool_calls.append(tool_call)
                     if tool_calls:
-                        return None, tool_calls  # Only tool calls, no remaining content
+                        return None, tool_calls
             except (json.JSONDecodeError, TypeError, KeyError):
-                pass  # Not valid JSON, continue with other methods
+                pass
 
-        # Try code blocks
+        # Code blocks format
         for match in cls.TOOL_CALL_PATTERN.finditer(content):
             json_str = match.group(1)
             try:
                 data = json.loads(json_str)
 
-                # Handle single tool_call
                 tool_call_data = data.get("tool_call", {})
                 if tool_call_data and "name" in tool_call_data:
                     tool_call = {
@@ -332,7 +324,6 @@ class ToolHandler:
                     tool_calls.append(tool_call)
                     positions_to_remove.append((match.start(), match.end()))
 
-                # Handle multiple tool_calls (parallel)
                 tool_calls_data = data.get("tool_calls", [])
                 if tool_calls_data and isinstance(tool_calls_data, list):
                     for tc_data in tool_calls_data:
@@ -373,17 +364,15 @@ class ToolHandler:
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-        # If no code block matches, try inline JSON extraction
+        # Inline JSON extraction fallback
         if not tool_calls:
             for start, end, json_str in cls._extract_json_objects(content):
-                # Check if this looks like a tool call
                 if '"tool_call"' not in json_str and '"tool_calls"' not in json_str:
                     continue
 
                 try:
                     data = json.loads(json_str)
 
-                    # Handle single tool_call
                     tool_call_data = data.get("tool_call", {})
                     if tool_call_data and "name" in tool_call_data:
                         tool_call = {
@@ -399,7 +388,6 @@ class ToolHandler:
                         tool_calls.append(tool_call)
                         positions_to_remove.append((start, end))
 
-                    # Handle multiple tool_calls (parallel)
                     tool_calls_data = data.get("tool_calls", [])
                     if tool_calls_data and isinstance(tool_calls_data, list):
                         for tc_data in tool_calls_data:
@@ -423,14 +411,12 @@ class ToolHandler:
         if not tool_calls:
             return content, None
 
-        # Remove tool call JSON from content (in reverse order to preserve positions)
+        # Remove matched positions in reverse order to preserve indices
         remaining = content
         for start, end in sorted(positions_to_remove, reverse=True):
             remaining = remaining[:start] + remaining[end:]
 
         remaining = remaining.strip()
-
-        # If only whitespace remains, return None for content
         if not remaining:
             remaining = None
 

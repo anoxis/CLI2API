@@ -10,8 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChatMessage(BaseModel):
-    """A single chat message."""
-
     model_config = ConfigDict(extra="ignore")
 
     role: Literal["system", "user", "assistant", "tool", "function"]
@@ -47,8 +45,6 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    """Request body for /v1/chat/completions."""
-
     model_config = ConfigDict(extra="ignore")
 
     model: str
@@ -78,31 +74,23 @@ class ChatCompletionRequest(BaseModel):
 
 
 class UsageInfo(BaseModel):
-    """Token usage information."""
-
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
 
 
 class ToolCallFunction(BaseModel):
-    """Function details in a tool call."""
-
     name: str
     arguments: str  # JSON string
 
 
 class ToolCall(BaseModel):
-    """A tool call in the response."""
-
     id: str
     type: Literal["function"] = "function"
     function: ToolCallFunction
 
 
 class ResponseMessage(BaseModel):
-    """Message in response."""
-
     model_config = ConfigDict(extra="ignore")
 
     role: Literal["assistant"] = "assistant"
@@ -121,8 +109,6 @@ class ResponseMessage(BaseModel):
 
 
 class ChatCompletionChoice(BaseModel):
-    """A single completion choice."""
-
     index: int = 0
     message: ResponseMessage
     finish_reason: Literal["stop", "length", "tool_calls", "content_filter"] | None = (
@@ -136,8 +122,6 @@ class ChatCompletionChoice(BaseModel):
 
 
 class ChatCompletionResponse(BaseModel):
-    """Response body for non-streaming /v1/chat/completions."""
-
     id: str
     object: Literal["chat.completion"] = "chat.completion"
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -155,8 +139,6 @@ class ChatCompletionResponse(BaseModel):
 
 
 class ReasoningDetail(BaseModel):
-    """A single reasoning detail for streaming."""
-
     type: Literal["reasoning.text", "reasoning.summary", "reasoning.encrypted"] = "reasoning.text"
     text: Optional[str] = None
     summary: Optional[str] = None
@@ -169,8 +151,6 @@ class ReasoningDetail(BaseModel):
 
 
 class DeltaContent(BaseModel):
-    """Delta content for streaming responses."""
-
     role: Optional[Literal["assistant"]] = None
     content: Optional[str] = None
     tool_calls: Optional[list[ToolCall]] = None
@@ -183,8 +163,6 @@ class DeltaContent(BaseModel):
 
 
 class StreamChoice(BaseModel):
-    """A single streaming choice."""
-
     index: int = 0
     delta: DeltaContent
     finish_reason: Literal["stop", "length", "tool_calls"] | None = None
@@ -196,8 +174,6 @@ class StreamChoice(BaseModel):
 
 
 class ChatCompletionChunk(BaseModel):
-    """A single streaming chunk for /v1/chat/completions."""
-
     id: str
     object: Literal["chat.completion.chunk"] = "chat.completion.chunk"
     created: int = Field(default_factory=lambda: int(time.time()))
@@ -214,8 +190,6 @@ class ChatCompletionChunk(BaseModel):
 
 
 class ModelInfo(BaseModel):
-    """Information about a single model."""
-
     id: str
     object: Literal["model"] = "model"
     created: int = 0
@@ -223,7 +197,5 @@ class ModelInfo(BaseModel):
 
 
 class ModelsResponse(BaseModel):
-    """Response body for /v1/models."""
-
     object: Literal["list"] = "list"
     data: list[ModelInfo]

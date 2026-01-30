@@ -67,7 +67,6 @@ def _format_tool_result(tool_call_id: Optional[str], content: Optional[str]) -> 
 
 
 def _format_bash_step(tool_input: dict) -> str:
-    """Format Bash command step indicator."""
     cmd = tool_input.get("command", "")
     if not cmd:
         return f"`{STEP_EMOJI_BASH} Bash`\n"
@@ -77,14 +76,12 @@ def _format_bash_step(tool_input: dict) -> str:
 
 
 def _format_file_step(tool_name: str, tool_input: dict) -> str:
-    """Format file operation step indicator (Read, Glob, Edit, Write)."""
     path = tool_input.get("file_path", tool_input.get("pattern", ""))
     emoji = STEP_EMOJI_EDIT if tool_name in ("Edit", "Write") else STEP_EMOJI_READ
     return f"`{emoji} {tool_name}: {path}`\n"
 
 
 def _format_grep_step(tool_input: dict) -> str:
-    """Format Grep step indicator."""
     pattern = tool_input.get("pattern", "")
     if pattern:
         truncated = pattern[:GREP_PATTERN_PREVIEW_LENGTH]
@@ -93,36 +90,26 @@ def _format_grep_step(tool_input: dict) -> str:
 
 
 def _format_task_step(tool_input: dict) -> str:
-    """Format Task step indicator."""
     desc = tool_input.get("description", "")
     return f"`{STEP_EMOJI_TASK} {desc}`\n" if desc else f"`{STEP_EMOJI_TASK} Task`\n"
 
 
-# Dispatch table for step indicator formatting
 _STEP_FORMATTERS: dict[str, Callable[[dict], str]] = {
     "Bash": _format_bash_step,
     "Grep": _format_grep_step,
     "Task": _format_task_step,
 }
 
-# Tools that use file path formatting
 _FILE_TOOLS = {"Read", "Glob", "Edit", "Write"}
 
 
 def _format_step_indicator(tool_name: str, tool_input: dict) -> str:
-    """Format step indicator for tool use.
-
-    Uses dispatch table for specific tools, falls back to default format.
-    """
-    # Check dispatch table first
     if tool_name in _STEP_FORMATTERS:
         return _STEP_FORMATTERS[tool_name](tool_input)
 
-    # File-based tools
     if tool_name in _FILE_TOOLS:
         return _format_file_step(tool_name, tool_input)
 
-    # Default format
     return f"`{STEP_EMOJI_DEFAULT} {tool_name}`\n"
 
 
@@ -328,7 +315,6 @@ class ClaudeCodeProvider:
         except RuntimeError:
             raise
 
-        # Parse JSON output
         output = self._parse_json_line(stdout.decode())
         if output is None:
             # Fallback: treat as plain text
@@ -370,9 +356,8 @@ class ClaudeCodeProvider:
 
         proc = await self._create_stream_process(cmd)
 
-        # Use streaming parser when tools are provided
         tool_parser = StreamingToolParser() if tools else None
-        accumulated_content = ""  # For fallback parsing
+        accumulated_content = ""
 
         try:
             async for line in proc.stdout:
