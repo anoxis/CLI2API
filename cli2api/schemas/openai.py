@@ -52,7 +52,7 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: str
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(..., min_length=1)
     stream: bool = False
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, gt=0)

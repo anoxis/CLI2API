@@ -273,10 +273,15 @@ class ClaudeCodeProvider:
             await proc.wait()
 
     def _parse_json_line(self, line: str) -> Optional[dict]:
-        """Parse a JSON line, returning None if invalid."""
+        """Parse a JSON line, returning None if invalid.
+
+        Logs parsing errors at debug level for diagnostics.
+        """
         try:
             return json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # Log at debug level - invalid JSON is expected for plain text lines
+            logger.debug(f"JSON parse skipped (not JSON): {line[:100]}... Error: {e.msg}")
             return None
 
     def _handle_tool_calls_in_content(

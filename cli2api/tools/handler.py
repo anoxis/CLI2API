@@ -11,6 +11,34 @@ from cli2api.constants import (
     TOOL_CALL_START_MARKER,
     TOOL_CALL_END_MARKER,
 )
+from cli2api.schemas.openai import ChatMessage
+
+
+# ==================== Message Helpers ====================
+
+
+def _get_message_role(msg: Any) -> str:
+    """Get role from message (works with both objects and dicts)."""
+    if hasattr(msg, "role"):
+        return msg.role
+    if isinstance(msg, dict):
+        return msg.get("role", "")
+    return ""
+
+
+def _get_message_content(msg: Any) -> str:
+    """Get content from message (works with both objects and dicts)."""
+    if hasattr(msg, "content"):
+        return msg.content or ""
+    if isinstance(msg, dict):
+        return msg.get("content", "")
+    return ""
+
+
+def _set_message_content(msg: Any, content: str) -> None:
+    """Set content on a dict message (mutates in place)."""
+    if isinstance(msg, dict):
+        msg["content"] = content
 
 
 class ToolHandler:
@@ -455,47 +483,32 @@ class ToolHandler:
 
         # Make a copy to avoid modifying original
         messages = list(messages)
-        from cli2api.schemas.openai import ChatMessage
 
         # 1. Sanitize system prompt if exists
         for i, msg in enumerate(messages):
-            is_system = False
-            if hasattr(msg, "role") and msg.role == "system":
-                is_system = True
-            elif isinstance(msg, dict) and msg.get("role") == "system":
-                is_system = True
-
-            if is_system:
-                if hasattr(msg, "content"):
-                    existing_content = msg.content or ""
-                    sanitized = cls._sanitize_system_prompt(existing_content)
+            if _get_message_role(msg) == "system":
+                sanitized = cls._sanitize_system_prompt(_get_message_content(msg))
+                if isinstance(msg, dict):
+                    _set_message_content(msg, sanitized)
+                else:
                     messages[i] = ChatMessage(role="system", content=sanitized)
-                elif isinstance(msg, dict):
-                    msg["content"] = cls._sanitize_system_prompt(msg.get("content", ""))
 
-        # 2. Find last user message and append tool instructions there
-        last_user_idx = None
-        for i in range(len(messages) - 1, -1, -1):
-            msg = messages[i]
-            if hasattr(msg, "role") and msg.role == "user":
-                last_user_idx = i
-                break
-            elif isinstance(msg, dict) and msg.get("role") == "user":
-                last_user_idx = i
-                break
+        # 2. Find last user message and append tool instructions
+        last_user_idx = next(
+            (i for i in range(len(messages) - 1, -1, -1)
+             if _get_message_role(messages[i]) == "user"),
+            None
+        )
 
         if last_user_idx is not None:
             msg = messages[last_user_idx]
-            if hasattr(msg, "content"):
-                existing = msg.content or ""
-                new_content = f"{existing}\n\n[RESPOND IN JSON FORMAT]\n{tool_prompt}"
+            new_content = f"{_get_message_content(msg)}\n\n[RESPOND IN JSON FORMAT]\n{tool_prompt}"
+            if isinstance(msg, dict):
+                _set_message_content(msg, new_content)
+            else:
                 messages[last_user_idx] = ChatMessage(role="user", content=new_content)
-            elif isinstance(msg, dict):
-                existing = msg.get("content", "")
-                msg["content"] = f"{existing}\n\n[RESPOND IN JSON FORMAT]\n{tool_prompt}"
         else:
             # No user message found, insert as system message
-            system_msg = ChatMessage(role="system", content=tool_prompt)
-            messages.insert(0, system_msg)
+            messages.insert(0, ChatMessage(role="system", content=tool_prompt))
 
         return messages

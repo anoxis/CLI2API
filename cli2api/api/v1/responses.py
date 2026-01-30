@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cli2api.api.dependencies import get_provider
 from cli2api.api.utils import parse_model_name
@@ -46,12 +46,22 @@ class ResponsesRequest(BaseModel):
     input: list[ResponsesInputMessage] | str
     stream: bool = False
     instructions: Optional[str] = None
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: Optional[int] = Field(default=None, gt=0)
     # Additional fields
     tools: Optional[list[Any]] = None
     tool_choice: Optional[Any] = None
     metadata: Optional[dict] = None
+
+    @field_validator("input")
+    @classmethod
+    def input_not_empty(cls, v: list | str) -> list | str:
+        """Validate that input is not empty."""
+        if isinstance(v, str) and not v.strip():
+            raise ValueError("input cannot be empty string")
+        if isinstance(v, list) and len(v) == 0:
+            raise ValueError("input cannot be empty list")
+        return v
 
 
 # === Response Models ===
@@ -78,38 +88,54 @@ class ResponsesResponse(BaseModel):
 
 
 def convert_to_chat_messages(request: ResponsesRequest) -> list[ChatMessage]:
-    """Convert Responses API input to ChatMessage list."""
-    messages = []
+    """Convert Responses API input to ChatMessage list.
+
+    Args:
+        request: The ResponsesRequest with input messages.
+
+    Returns:
+        List of ChatMessage objects for the provider.
+    """
+    messages: list[ChatMessage] = []
 
     # Add instructions as system message
     if request.instructions:
         messages.append(ChatMessage(role="system", content=request.instructions))
 
-    # Handle input
+    # Handle input - can be string or list of messages
     if isinstance(request.input, str):
         messages.append(ChatMessage(role="user", content=request.input))
     else:
         for msg in request.input:
-            content = msg.content
-            if isinstance(content, list):
-                # Extract text from content blocks
-                texts = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        texts.append(item.get("text", ""))
-                    elif isinstance(item, str):
-                        texts.append(item)
-                content = "\n".join(texts)
-            elif content is None:
-                content = ""
-
-            role = msg.role
-            if role not in ("system", "user", "assistant"):
-                role = "user"  # Default to user for unknown roles
-
-            messages.append(ChatMessage(role=role, content=str(content)))
+            content: str = _extract_message_content(msg.content)
+            role: str = msg.role if msg.role in ("system", "user", "assistant") else "user"
+            messages.append(ChatMessage(role=role, content=content))
 
     return messages
+
+
+def _extract_message_content(content: Any) -> str:
+    """Extract text content from various message content formats.
+
+    Args:
+        content: Message content - can be str, list of content blocks, or None.
+
+    Returns:
+        Extracted text content as string.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                texts.append(item)
+        return "\n".join(texts)
+    return str(content)
 
 
 @router.post("/responses")
