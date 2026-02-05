@@ -1,6 +1,6 @@
 [project]
 name = "cli2api"
-version = "0.2.0"
+version = "0.2.1"
 description = "OpenAI-compatible API over Claude Code CLI"
 readme = "README.md"
 requires-python = ">=3.11"
