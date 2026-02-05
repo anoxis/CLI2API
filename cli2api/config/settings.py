@@ -1,6 +1,5 @@
 """Application settings."""
 
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -68,19 +67,33 @@ class Settings(BaseSettings):
     @classmethod
     def detect_claude_cli(cls, v: Optional[str]) -> Optional[str]:
         """Auto-detect claude CLI path if not provided."""
+        from cli2api.utils.cli_detector import (
+            cache_path,
+            detect_claude_cli,
+            verify_claude_executable,
+        )
+        from cli2api.utils.logging import get_logger
+
+        logger = get_logger(__name__)
+
         if v:
-            return v
-        # Try which first
-        path = shutil.which("claude")
-        if path:
-            return path
-        # Fallback to common paths
-        common_paths = [
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            Path.home() / ".local/bin/claude",
-        ]
-        for p in common_paths:
-            if Path(p).exists():
-                return str(p)
+            # User explicitly set path - verify it
+            path = Path(v)
+            if verify_claude_executable(path):
+                logger.info(f"Using explicitly set Claude CLI path: {v}")
+                # Cache explicitly set path
+                cache_path(path)
+                return v
+            logger.warning(f"Explicitly set Claude CLI path is invalid: {v}")
+
+        # Auto-detect (includes cache check)
+        detected_path = detect_claude_cli()
+
+        if detected_path:
+            logger.info(f"Auto-detected Claude CLI: {detected_path}")
+            # Cache detected path for next startup
+            cache_path(detected_path)
+            return str(detected_path)
+
+        logger.error("Claude CLI not found")
         return None

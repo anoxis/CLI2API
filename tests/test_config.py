@@ -1,6 +1,7 @@
 """Tests for configuration and settings."""
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -54,15 +55,18 @@ class TestSettings:
             "CLI2API_CLAUDE_CLI_PATH": "/custom/path/to/claude",
         }
 
-        with patch.dict(os.environ, env_vars, clear=True):
-            settings = Settings(_env_file=None)
+        # Mock verify_claude_executable to accept the custom path
+        with patch("cli2api.utils.cli_detector.verify_claude_executable", return_value=True):
+            with patch.dict(os.environ, env_vars, clear=True):
+                settings = Settings(_env_file=None)
 
-            assert settings.claude_cli_path == "/custom/path/to/claude"
+                assert settings.claude_cli_path == "/custom/path/to/claude"
 
     def test_cli_path_auto_detect(self):
         """Test CLI path auto-detection."""
-        with patch("shutil.which") as mock_which:
-            mock_which.return_value = "/detected/path/to/claude"
+        # Mock detect_claude_cli to return a detected path
+        with patch("cli2api.utils.cli_detector.detect_claude_cli") as mock_detect:
+            mock_detect.return_value = Path("/detected/path/to/claude")
 
             with patch.dict(os.environ, {}, clear=True):
                 settings = Settings(_env_file=None)
@@ -71,12 +75,12 @@ class TestSettings:
 
     def test_cli_path_not_found(self):
         """Test when CLI is not found."""
-        with patch("cli2api.config.settings.shutil.which", return_value=None):
-            with patch("pathlib.Path.exists", return_value=False):
-                with patch.dict(os.environ, {}, clear=True):
-                    settings = Settings(_env_file=None)
+        # Mock detect_claude_cli to return None (not found)
+        with patch("cli2api.utils.cli_detector.detect_claude_cli", return_value=None):
+            with patch.dict(os.environ, {}, clear=True):
+                settings = Settings(_env_file=None)
 
-                    assert settings.claude_cli_path is None
+                assert settings.claude_cli_path is None
 
     def test_explicit_path_overrides_auto_detect(self):
         """Test that explicit path overrides auto-detection."""
@@ -84,11 +88,14 @@ class TestSettings:
             "CLI2API_CLAUDE_CLI_PATH": "/explicit/claude",
         }
 
-        with patch("shutil.which", return_value="/auto/detected"):
-            with patch.dict(os.environ, env_vars, clear=True):
-                settings = Settings(_env_file=None)
+        # Mock verify to accept explicit path
+        with patch("cli2api.utils.cli_detector.verify_claude_executable", return_value=True):
+            # Mock detect_claude_cli (should not be called when explicit path is valid)
+            with patch("cli2api.utils.cli_detector.detect_claude_cli", return_value=Path("/auto/detected")):
+                with patch.dict(os.environ, env_vars, clear=True):
+                    settings = Settings(_env_file=None)
 
-                assert settings.claude_cli_path == "/explicit/claude"
+                    assert settings.claude_cli_path == "/explicit/claude"
 
     def test_get_claude_models_default(self):
         """Test default Claude models."""
