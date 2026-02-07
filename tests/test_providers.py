@@ -195,3 +195,176 @@ class TestMockProvider:
 
         content = "".join(c.content for c in chunks if c.content)
         assert content == "ABC"
+
+
+class TestDeserializeStringValues:
+    """Tests for _deserialize_string_values in ClaudeCodeProvider."""
+
+    @pytest.fixture
+    def provider(self):
+        return ClaudeCodeProvider(
+            executable_path=Path("/usr/bin/claude"),
+            default_timeout=300,
+        )
+
+    def test_json_array_string_is_deserialized(self, provider):
+        """JSON array encoded as string should be parsed to native array."""
+        obj = {"follow_up": '[{"text":"Yes","mode":null}]'}
+        result = provider._deserialize_string_values(obj)
+        assert isinstance(result["follow_up"], list)
+        assert result["follow_up"][0]["text"] == "Yes"
+
+    def test_json_object_string_is_deserialized(self, provider):
+        """JSON object encoded as string should be parsed to native dict."""
+        obj = {"data": '{"key": "value"}'}
+        result = provider._deserialize_string_values(obj)
+        assert isinstance(result["data"], dict)
+        assert result["data"]["key"] == "value"
+
+    def test_plain_string_is_unchanged(self, provider):
+        """Non-JSON strings should pass through unchanged."""
+        obj = {"question": "What do you want?", "command": "ls -la"}
+        result = provider._deserialize_string_values(obj)
+        assert result["question"] == "What do you want?"
+        assert result["command"] == "ls -la"
+
+    def test_non_string_values_are_unchanged(self, provider):
+        """Non-string values (int, bool, list, dict) should pass through."""
+        obj = {"count": 5, "active": True, "items": [1, 2], "meta": {"k": "v"}}
+        result = provider._deserialize_string_values(obj)
+        assert result == obj
+
+    def test_invalid_json_starting_with_bracket_is_unchanged(self, provider):
+        """Strings starting with [ or { but not valid JSON should pass through."""
+        obj = {"note": "[not valid json", "other": "{also not valid"}
+        result = provider._deserialize_string_values(obj)
+        assert result["note"] == "[not valid json"
+        assert result["other"] == "{also not valid"
+
+    def test_empty_string_is_unchanged(self, provider):
+        """Empty strings should pass through."""
+        obj = {"empty": ""}
+        result = provider._deserialize_string_values(obj)
+        assert result["empty"] == ""
+
+    def test_real_kilo_code_follow_up(self, provider):
+        """Reproduce exact Kilo Code ask_followup_question scenario."""
+        obj = {
+            "question": "Согласны с планом?",
+            "follow_up": '[{"text":"Y — Да","mode":null},{"text":"N — Нет","mode":null}]',
+        }
+        result = provider._deserialize_string_values(obj)
+        assert isinstance(result["follow_up"], list)
+        assert len(result["follow_up"]) == 2
+        assert result["follow_up"][0]["text"] == "Y — Да"
+        assert result["question"] == "Согласны с планом?"
+
+
+class TestExtractNativeToolCall:
+    """Tests for _extract_native_tool_call — the full path that caused 'o.map is not a function'.
+
+    Claude Opus returns native tool_use blocks. When tool arguments contain
+    JSON-encoded strings (e.g. follow_up as "[{...}]"), Kilo Code receives
+    a string instead of an array and crashes on .map().
+
+    These tests verify that _extract_native_tool_call deserializes such
+    strings so the final 'arguments' JSON contains native arrays/objects.
+    """
+
+    @pytest.fixture
+    def provider(self):
+        return ClaudeCodeProvider(
+            executable_path=Path("/usr/bin/claude"),
+            default_timeout=300,
+        )
+
+    def test_ask_followup_question_follow_up_is_array(self, provider):
+        """Exact reproduction of the o.map crash: follow_up must be array, not string."""
+        block = {
+            "type": "tool_use",
+            "id": "toolu_01ABC",
+            "name": "ask_followup_question",
+            "input": {
+                "question": "Согласны с включением шагов 2.4 и 2.5?",
+                "follow_up": '[{"text":"Y — Да, включить","mode":null},{"text":"N — Нужно обсудить","mode":null}]',
+            },
+        }
+
+        result = provider._extract_native_tool_call(block)
+
+        assert result is not None
+        assert result["function"]["name"] == "ask_followup_question"
+        assert result["id"] == "toolu_01ABC"
+
+        # Parse the arguments JSON that Kilo Code will receive
+        args = json.loads(result["function"]["arguments"])
+        assert args["question"] == "Согласны с включением шагов 2.4 и 2.5?"
+
+        # THIS is the critical assertion — follow_up must be a list, not a string
+        assert isinstance(args["follow_up"], list), (
+            f"follow_up should be list but got {type(args['follow_up']).__name__}: "
+            f"{args['follow_up']!r}"
+        )
+        assert len(args["follow_up"]) == 2
+        assert args["follow_up"][0]["text"] == "Y — Да, включить"
+
+    def test_simple_tool_call_unchanged(self, provider):
+        """Tool calls with plain string arguments should not be affected."""
+        block = {
+            "type": "tool_use",
+            "id": "toolu_02DEF",
+            "name": "execute_command",
+            "input": {"command": "ls -la"},
+        }
+
+        result = provider._extract_native_tool_call(block)
+        args = json.loads(result["function"]["arguments"])
+
+        assert args["command"] == "ls -la"
+        assert isinstance(args["command"], str)
+
+    def test_tool_call_with_nested_json_object_string(self, provider):
+        """JSON object encoded as string in arguments should be deserialized."""
+        block = {
+            "type": "tool_use",
+            "id": "toolu_03GHI",
+            "name": "some_tool",
+            "input": {
+                "config": '{"key": "value", "nested": true}',
+            },
+        }
+
+        result = provider._extract_native_tool_call(block)
+        args = json.loads(result["function"]["arguments"])
+
+        assert isinstance(args["config"], dict)
+        assert args["config"]["key"] == "value"
+
+    def test_missing_tool_name_returns_none(self, provider):
+        """Block without tool name should return None."""
+        block = {"type": "tool_use", "input": {"x": 1}}
+
+        assert provider._extract_native_tool_call(block) is None
+
+    def test_empty_input_returns_empty_args(self, provider):
+        """Block with empty input should produce empty arguments."""
+        block = {
+            "type": "tool_use",
+            "name": "list_files",
+            "input": {},
+        }
+
+        result = provider._extract_native_tool_call(block)
+        args = json.loads(result["function"]["arguments"])
+        assert args == {}
+
+    def test_generates_id_when_missing(self, provider):
+        """Should generate a call_ prefixed ID when block has no id."""
+        block = {
+            "type": "tool_use",
+            "name": "test_tool",
+            "input": {},
+        }
+
+        result = provider._extract_native_tool_call(block)
+        assert result["id"].startswith("call_")

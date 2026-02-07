@@ -298,3 +298,22 @@ class TestParseResultDataclass:
         result = ParseResult(text="hello", tool_calls=[{"id": "test"}])
         assert result.text == "hello"
         assert result.tool_calls == [{"id": "test"}]
+
+
+class TestToolCallEdgeCases:
+    """Tests for tool call edge cases (missing arguments, etc)."""
+
+    def test_tool_call_without_arguments_key(self):
+        """Tool call JSON without 'arguments' key produces empty args dict.
+
+        This documents current parser behavior — validation happens downstream.
+        """
+        parser = StreamingToolParser()
+
+        text = '<tool_call>{"name": "execute_command"}</tool_call>'
+        result = parser.feed(text)
+
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0]["function"]["name"] == "execute_command"
+        args = json.loads(result.tool_calls[0]["function"]["arguments"])
+        assert args == {}

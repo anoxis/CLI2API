@@ -2,13 +2,16 @@
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from cli2api.constants import ID_HEX_LENGTH, TOOL_CALL_ID_PREFIX
 from cli2api.schemas.internal import ProviderChunk, ProviderResult
 from cli2api.schemas.openai import ChatMessage
 from cli2api.streaming.tool_parser import StreamingToolParser
 from cli2api.tools.handler import ToolHandler
+from cli2api.tools.validator import filter_valid_tool_calls
 from cli2api.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -221,7 +224,9 @@ class ClaudeCodeProvider:
     ) -> tuple[str, Optional[list[dict]]]:
         """Parse content for tool calls if tools are provided."""
         if tools and content:
-            return ToolHandler.parse_tool_calls(content)
+            remaining, tool_calls = ToolHandler.parse_tool_calls(content)
+            tool_calls = filter_valid_tool_calls(tool_calls, tools)
+            return remaining, tool_calls
         return content, None
 
     def _create_final_chunk(
@@ -237,18 +242,36 @@ class ClaudeCodeProvider:
             usage=usage,
         )
 
+    @staticmethod
+    def _deserialize_string_values(obj: dict) -> dict:
+        """Deserialize JSON-encoded string values in tool arguments.
+
+        Claude sometimes returns structured data (arrays, objects) as
+        JSON-encoded strings. Kilo Code expects native types, so we
+        parse them back. E.g. follow_up: '[{"text":"Yes"}]' -> [{"text":"Yes"}]
+        """
+        result = {}
+        for key, value in obj.items():
+            if isinstance(value, str) and value and value[0] in ('[', '{'):
+                try:
+                    result[key] = json.loads(value)
+                except (json.JSONDecodeError, ValueError):
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
+
     def _extract_native_tool_call(self, block: dict) -> Optional[dict]:
         """Extract tool call from Claude native tool_use block."""
-        import json
-        import uuid
-        from cli2api.constants import ID_HEX_LENGTH, TOOL_CALL_ID_PREFIX
-
         tool_name = block.get("name")
         tool_input = block.get("input", {})
         tool_id = block.get("id", f"{TOOL_CALL_ID_PREFIX}{uuid.uuid4().hex[:ID_HEX_LENGTH]}")
 
         if not tool_name:
             return None
+
+        if isinstance(tool_input, dict):
+            tool_input = self._deserialize_string_values(tool_input)
 
         return {
             "id": tool_id,
@@ -391,12 +414,14 @@ class ClaudeCodeProvider:
                             # Native tool calling (stop_reason=tool_use)
                             if stop_reason == "tool_use":
                                 tool_calls = native_tool_calls if native_tool_calls else None
+                                tool_calls = filter_valid_tool_calls(tool_calls, tools)
                                 logger.info(f"[STREAM] Native tool_calls: {len(tool_calls) if tool_calls else 0}")
                             elif tool_parser:
                                 final_result = tool_parser.finalize()
                                 if final_result.text:
                                     yield ProviderChunk(content=final_result.text)
                                 tool_calls = tool_parser.get_all_tool_calls()
+                                tool_calls = filter_valid_tool_calls(tool_calls, tools)
                             else:
                                 _, tool_calls = self._handle_tool_calls_in_content(
                                     accumulated_content, tools
@@ -433,6 +458,7 @@ class ClaudeCodeProvider:
                         if final_result.text:
                             yield ProviderChunk(content=final_result.text)
                         tool_calls = tool_parser.get_all_tool_calls()
+                        tool_calls = filter_valid_tool_calls(tool_calls, tools)
                     else:
                         _, tool_calls = self._handle_tool_calls_in_content(
                             accumulated_content, tools
@@ -476,6 +502,7 @@ class ClaudeCodeProvider:
                         if final_result.text:
                             yield ProviderChunk(content=final_result.text)
                         tool_calls = tool_parser.get_all_tool_calls()
+                        tool_calls = filter_valid_tool_calls(tool_calls, tools)
                     else:
                         _, tool_calls = self._handle_tool_calls_in_content(
                             accumulated_content, tools
@@ -489,6 +516,7 @@ class ClaudeCodeProvider:
                 if final_result.text:
                     yield ProviderChunk(content=final_result.text)
                 tool_calls = tool_parser.get_all_tool_calls()
+                tool_calls = filter_valid_tool_calls(tool_calls, tools)
             else:
                 _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
 

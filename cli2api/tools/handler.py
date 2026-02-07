@@ -3,6 +3,8 @@
 import json
 import re
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from cli2api.constants import (
@@ -12,6 +14,13 @@ from cli2api.constants import (
     TOOL_CALL_END_MARKER,
 )
 from cli2api.schemas.openai import ChatMessage
+
+
+@lru_cache(maxsize=4)
+def _load_prompt_template(filename: str) -> str:
+    """Load prompt template from cli2api/prompts/ directory."""
+    path = Path(__file__).parent.parent / "prompts" / filename
+    return path.read_text()
 
 
 # ==================== Message Helpers ====================
@@ -86,9 +95,8 @@ class ToolHandler:
             key=lambda t: t.get("function", {}).get("name", "")
         )
 
-        lines = [
-            "You have access to the following tools:\n",
-        ]
+        tool_definitions = []
+        tool_examples = []
 
         for tool in tools:
             if tool.get("type") != "function":
@@ -98,14 +106,10 @@ class ToolHandler:
             name = func.get("name", "unknown")
             description = func.get("description", "No description")
             params = func.get("parameters", {})
-
-            lines.append(f"## {name}")
-            lines.append(f"{description}\n")
-
-            # Format parameters
             properties = params.get("properties", {})
             required = params.get("required", [])
 
+            lines = [f"## {name}", f"{description}\n"]
             if properties:
                 lines.append("Parameters:")
                 for pname, pinfo in properties.items():
@@ -114,45 +118,23 @@ class ToolHandler:
                     req = " (required)" if pname in required else " (optional)"
                     lines.append(f"- {pname} ({ptype}{req}): {pdesc}")
                 lines.append("")
+            tool_definitions.append("\n".join(lines))
 
-        lines.append("\n---")
-        lines.append("RESPONSE FORMAT:")
-        lines.append("")
-        lines.append("When calling tools, wrap EACH tool call in <tool_call> tags.")
-        lines.append("You may include explanatory text before or after the tags.")
-        lines.append("")
-        lines.append("For a SINGLE tool call:")
-        lines.append("<tool_call>")
-        lines.append('{"name": "TOOL_NAME", "arguments": {...}}')
-        lines.append("</tool_call>")
-        lines.append("")
-        lines.append("For MULTIPLE tool calls, use SEPARATE tags for each:")
-        lines.append("<tool_call>")
-        lines.append('{"name": "read_file", "arguments": {"path": "file1.py"}}')
-        lines.append("</tool_call>")
-        lines.append("<tool_call>")
-        lines.append('{"name": "read_file", "arguments": {"path": "file2.py"}}')
-        lines.append("</tool_call>")
-        lines.append("")
-        lines.append("CRITICAL RULES:")
-        lines.append("- ALWAYS wrap tool calls in <tool_call>...</tool_call> tags")
-        lines.append("- Each tool call must be in its own tag pair")
-        lines.append("- When reading multiple files, include multiple <tool_call> tags")
-        lines.append("- You CAN include text explanation before/after tags")
-        lines.append("- Do NOT execute tools yourself - just output the tags")
-        lines.append("- If user wants to read a file -> use read_file tool")
-        lines.append("- If user wants to list files -> use list_files tool")
-        lines.append("- ALWAYS include ALL required parameters for each tool")
-        lines.append("")
-        lines.append("ATTEMPT_COMPLETION USAGE:")
-        lines.append("When using attempt_completion, ALWAYS include the 'result' parameter:")
-        lines.append("<tool_call>")
-        lines.append('{"name": "attempt_completion", "arguments": {"result": "Your response text here"}}')
-        lines.append("</tool_call>")
-        lines.append("- The 'result' parameter is REQUIRED and must contain your final response")
-        lines.append("- Use attempt_completion ONLY after you have gathered all needed information")
+            # Generate example call for tools with required parameters
+            if required:
+                example_args = {p: "<value>" for p in required}
+                example_json = json.dumps({"name": name, "arguments": example_args})
+                tool_examples.append(f"<tool_call>\n{example_json}\n</tool_call>")
 
-        return "\n".join(lines)
+        template = _load_prompt_template("tools_instruction.txt")
+        examples_section = ""
+        if tool_examples:
+            examples_section = "Required parameter examples:\n" + "\n".join(tool_examples)
+
+        return template.format(
+            tool_definitions="\n".join(tool_definitions),
+            tool_examples=examples_section,
+        )
 
     @staticmethod
     def generate_tool_call_id() -> str:

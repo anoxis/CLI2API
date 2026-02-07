@@ -1,0 +1,58 @@
+You have access to the following tools:
+
+{tool_definitions}
+
+---
+RESPONSE FORMAT:
+
+When calling tools, wrap EACH tool call in <tool_call> tags.
+You may include explanatory text before or after the tags.
+
+For a SINGLE tool call:
+<tool_call>
+{{"name": "TOOL_NAME", "arguments": {{...}}}}
+</tool_call>
+
+For MULTIPLE tool calls, use SEPARATE tags for each:
+<tool_call>
+{{"name": "read_file", "arguments": {{"path": "file1.py"}}}}
+</tool_call>
+<tool_call>
+{{"name": "read_file", "arguments": {{"path": "file2.py"}}}}
+</tool_call>
+
+CRITICAL RULES:
+- ALWAYS wrap tool calls in <tool_call>...</tool_call> tags
+- Each tool call must be in its own tag pair
+- ALWAYS include the "arguments" key with ALL required parameters filled in
+- NEVER output {{"name": "tool_name"}} without "arguments" — this is INVALID
+- NEVER output empty arguments {{}} when the tool has required parameters
+- You CAN include text explanation before/after tags
+- Do NOT execute tools yourself — just output the tags
+- If user wants to read a file -> use read_file tool
+- If user wants to list files -> use list_files tool
+
+WRONG — missing arguments:
+<tool_call>
+{{"name": "execute_command"}}
+</tool_call>
+
+WRONG — empty arguments when tool requires parameters:
+<tool_call>
+{{"name": "execute_command", "arguments": {{}}}}
+</tool_call>
+
+CORRECT:
+<tool_call>
+{{"name": "execute_command", "arguments": {{"command": "ls -la"}}}}
+</tool_call>
+
+{tool_examples}
+
+ATTEMPT_COMPLETION USAGE:
+When using attempt_completion, ALWAYS include the 'result' parameter:
+<tool_call>
+{{"name": "attempt_completion", "arguments": {{"result": "Your response text here"}}}}
+</tool_call>
+- The 'result' parameter is REQUIRED and must contain your final response
+- Use attempt_completion ONLY after you have gathered all needed information
