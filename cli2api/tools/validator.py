@@ -1,4 +1,4 @@
-"""Tool call argument validation against OpenAI tool schemas."""
+"""Tool call argument validation and sanitization against OpenAI tool schemas."""
 
 import json
 from typing import Optional
@@ -6,6 +6,29 @@ from typing import Optional
 from cli2api.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def sanitize_tool_arguments(arguments: dict) -> dict:
+    """Sanitize tool call arguments: convert string "null" to None.
+
+    Claude sometimes generates "cwd": "null" (string) instead of
+    "cwd": null (JSON null) for optional parameters. This causes
+    downstream errors when the consumer interprets "null" as a
+    literal directory name.
+
+    Args:
+        arguments: Parsed tool call arguments dict.
+
+    Returns:
+        Sanitized arguments dict with "null" strings replaced by None.
+    """
+    result = {}
+    for key, value in arguments.items():
+        if isinstance(value, str) and value == "null":
+            result[key] = None
+        else:
+            result[key] = value
+    return result
 
 
 def build_required_params_index(tools: list[dict]) -> dict[str, list[str]]:
@@ -77,11 +100,38 @@ def validate_tool_call(
     return True
 
 
+def _sanitize_tool_call(tool_call: dict) -> dict:
+    """Sanitize a single tool call's arguments in-place.
+
+    Parses the arguments JSON, applies sanitize_tool_arguments,
+    and re-serializes. Returns the (possibly modified) tool call.
+    """
+    func = tool_call.get("function", {})
+    arguments_str = func.get("arguments", "{}")
+
+    try:
+        arguments = json.loads(arguments_str)
+    except (json.JSONDecodeError, TypeError):
+        return tool_call
+
+    if not isinstance(arguments, dict):
+        return tool_call
+
+    sanitized = sanitize_tool_arguments(arguments)
+    if sanitized != arguments:
+        func["arguments"] = json.dumps(sanitized)
+
+    return tool_call
+
+
 def filter_valid_tool_calls(
     tool_calls: Optional[list[dict]],
     tools: Optional[list[dict]],
 ) -> Optional[list[dict]]:
-    """Filter tool calls, removing those with missing required params.
+    """Filter and sanitize tool calls.
+
+    1. Sanitizes arguments (e.g. string "null" -> JSON null).
+    2. Removes tool calls with missing required params.
 
     Invalid tool calls are dropped with a WARNING log.
 
@@ -94,6 +144,9 @@ def filter_valid_tool_calls(
     """
     if not tool_calls or not tools:
         return tool_calls
+
+    # Sanitize all tool calls first
+    tool_calls = [_sanitize_tool_call(tc) for tc in tool_calls]
 
     index = build_required_params_index(tools)
     valid = [tc for tc in tool_calls if validate_tool_call(tc, index)]

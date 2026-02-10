@@ -247,6 +247,13 @@ class TestDeserializeStringValues:
         result = provider._deserialize_string_values(obj)
         assert result["empty"] == ""
 
+    def test_null_string_becomes_none(self, provider):
+        """String "null" should be converted to Python None."""
+        obj = {"cwd": "null", "command": "ls -la"}
+        result = provider._deserialize_string_values(obj)
+        assert result["cwd"] is None
+        assert result["command"] == "ls -la"
+
     def test_real_kilo_code_follow_up(self, provider):
         """Reproduce exact Kilo Code ask_followup_question scenario."""
         obj = {
@@ -357,6 +364,20 @@ class TestExtractNativeToolCall:
         result = provider._extract_native_tool_call(block)
         args = json.loads(result["function"]["arguments"])
         assert args == {}
+
+    def test_cwd_null_string_becomes_json_null(self, provider):
+        """String "null" for cwd should be converted to JSON null in arguments."""
+        block = {
+            "type": "tool_use",
+            "id": "toolu_04CWD",
+            "name": "execute_command",
+            "input": {"command": "ls -la", "cwd": "null"},
+        }
+
+        result = provider._extract_native_tool_call(block)
+        args = json.loads(result["function"]["arguments"])
+        assert args["cwd"] is None
+        assert args["command"] == "ls -la"
 
     def test_generates_id_when_missing(self, provider):
         """Should generate a call_ prefixed ID when block has no id."""

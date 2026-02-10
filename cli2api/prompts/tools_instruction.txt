@@ -27,6 +27,7 @@ CRITICAL RULES:
 - ALWAYS include the "arguments" key with ALL required parameters filled in
 - NEVER output {{"name": "tool_name"}} without "arguments" — this is INVALID
 - NEVER output empty arguments {{}} when the tool has required parameters
+- For optional parameters you want to omit, use JSON null (not the string "null")
 - You CAN include text explanation before/after tags
 - Do NOT execute tools yourself — just output the tags
 - If user wants to read a file -> use read_file tool
@@ -42,9 +43,19 @@ WRONG — empty arguments when tool requires parameters:
 {{"name": "execute_command", "arguments": {{}}}}
 </tool_call>
 
+WRONG — string "null" instead of JSON null for optional params:
+<tool_call>
+{{"name": "execute_command", "arguments": {{"command": "ls -la", "cwd": "null"}}}}
+</tool_call>
+
 CORRECT:
 <tool_call>
 {{"name": "execute_command", "arguments": {{"command": "ls -la"}}}}
+</tool_call>
+
+CORRECT — optional param with JSON null:
+<tool_call>
+{{"name": "execute_command", "arguments": {{"command": "ls -la", "cwd": null}}}}
 </tool_call>
 
 {tool_examples}

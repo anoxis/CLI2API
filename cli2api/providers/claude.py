@@ -249,10 +249,15 @@ class ClaudeCodeProvider:
         Claude sometimes returns structured data (arrays, objects) as
         JSON-encoded strings. Kilo Code expects native types, so we
         parse them back. E.g. follow_up: '[{"text":"Yes"}]' -> [{"text":"Yes"}]
+
+        Also converts string "null" to None — Claude sometimes generates
+        "cwd": "null" instead of "cwd": null for optional parameters.
         """
         result = {}
         for key, value in obj.items():
-            if isinstance(value, str) and value and value[0] in ('[', '{'):
+            if isinstance(value, str) and value == "null":
+                result[key] = None
+            elif isinstance(value, str) and value and value[0] in ('[', '{'):
                 try:
                     result[key] = json.loads(value)
                 except (json.JSONDecodeError, ValueError):

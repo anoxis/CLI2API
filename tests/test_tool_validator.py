@@ -7,6 +7,7 @@ import pytest
 from cli2api.tools.validator import (
     build_required_params_index,
     filter_valid_tool_calls,
+    sanitize_tool_arguments,
     validate_tool_call,
 )
 
@@ -199,3 +200,60 @@ class TestFilterValidToolCalls:
         tool_calls = [_make_tool_call("list_files", {})]
         result = filter_valid_tool_calls(tool_calls, SAMPLE_TOOLS)
         assert len(result) == 1
+
+    def test_sanitizes_null_string_to_json_null(self):
+        """filter_valid_tool_calls should convert "null" strings to JSON null."""
+        tc = _make_tool_call_raw(
+            "execute_command",
+            '{"command": "ls -la", "cwd": "null"}',
+        )
+        result = filter_valid_tool_calls([tc], SAMPLE_TOOLS)
+        assert len(result) == 1
+        args = json.loads(result[0]["function"]["arguments"])
+        assert args["cwd"] is None
+        assert args["command"] == "ls -la"
+
+    def test_sanitizes_preserves_real_null(self):
+        """JSON null should remain null after sanitization."""
+        tc = _make_tool_call_raw(
+            "execute_command",
+            '{"command": "ls -la", "cwd": null}',
+        )
+        result = filter_valid_tool_calls([tc], SAMPLE_TOOLS)
+        assert len(result) == 1
+        args = json.loads(result[0]["function"]["arguments"])
+        assert args["cwd"] is None
+        assert args["command"] == "ls -la"
+
+
+# === Tests for sanitize_tool_arguments ===
+
+
+class TestSanitizeToolArguments:
+    def test_null_string_becomes_none(self):
+        result = sanitize_tool_arguments({"cwd": "null", "command": "ls"})
+        assert result["cwd"] is None
+        assert result["command"] == "ls"
+
+    def test_none_stays_none(self):
+        result = sanitize_tool_arguments({"cwd": None, "command": "ls"})
+        assert result["cwd"] is None
+
+    def test_normal_strings_unchanged(self):
+        result = sanitize_tool_arguments({"path": "/tmp", "command": "ls"})
+        assert result["path"] == "/tmp"
+        assert result["command"] == "ls"
+
+    def test_non_string_values_unchanged(self):
+        result = sanitize_tool_arguments({"count": 5, "flag": True})
+        assert result["count"] == 5
+        assert result["flag"] is True
+
+    def test_empty_dict(self):
+        assert sanitize_tool_arguments({}) == {}
+
+    def test_string_containing_null_substring_unchanged(self):
+        """Only exact 'null' string should be converted, not substrings."""
+        result = sanitize_tool_arguments({"note": "nullable", "path": "nullify"})
+        assert result["note"] == "nullable"
+        assert result["path"] == "nullify"
