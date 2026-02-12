@@ -119,9 +119,9 @@ class ClaudeCodeProvider:
         prompt = "\n\n".join(parts)
         return prompt, system_prompt
 
-    # Max safe command line length. Windows CreateProcess limit is 32767,
-    # we use a conservative threshold accounting for other args + system overhead.
-    MAX_CMD_LINE_LENGTH = 30000
+    # Windows CreateProcess limit is 32767 chars for the entire command line.
+    # We use a conservative threshold to leave room for quoting/escaping.
+    MAX_CMD_LINE_LENGTH = 32000
 
     def build_command(
         self,
@@ -139,11 +139,8 @@ class ClaudeCodeProvider:
         """
         prompt, system_prompt = self.format_messages_as_prompt(messages)
 
-        use_stdin = len(prompt) > self.MAX_CMD_LINE_LENGTH
-
+        # Build cmd without prompt first, then check total length
         cmd = [str(self.executable_path), "-p"]
-        if not use_stdin:
-            cmd.append(prompt)
 
         # Output format
         if stream:
@@ -163,7 +160,18 @@ class ClaudeCodeProvider:
         if system_prompt:
             cmd.extend(["--system-prompt", system_prompt])
 
-        return cmd, prompt if use_stdin else None
+        # Check total command line length with prompt included
+        # Each arg gets a space separator + potential quoting
+        cmd_length = sum(len(a) for a in cmd) + len(cmd)  # args + spaces
+        total_with_prompt = cmd_length + len(prompt) + 3  # +3 for quotes and space
+
+        if total_with_prompt > self.MAX_CMD_LINE_LENGTH:
+            # Too long for Windows — pass prompt via stdin
+            return cmd, prompt
+        else:
+            # Safe to pass as CLI argument
+            cmd.insert(2, prompt)  # Insert after "-p"
+            return cmd, None
 
     # ==================== Subprocess Utilities ====================
 
@@ -555,6 +563,20 @@ class ClaudeCodeProvider:
                 tool_calls = filter_valid_tool_calls(tool_calls, tools)
             else:
                 _, tool_calls = self._handle_tool_calls_in_content(accumulated_content, tools)
+
+            # Log diagnostics when stream produced no content
+            if not accumulated_content:
+                stderr_data = b""
+                if proc.stderr:
+                    try:
+                        stderr_data = await asyncio.wait_for(proc.stderr.read(), timeout=2)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+                logger.warning(
+                    f"[STREAM] Empty response from Claude CLI. "
+                    f"returncode={proc.returncode}, "
+                    f"stderr={stderr_data.decode(errors='replace')[:500]}"
+                )
 
             yield self._create_final_chunk(tool_calls)
 
