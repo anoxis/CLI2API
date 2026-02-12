@@ -61,28 +61,28 @@ class TestClaudeCodeProvider:
 
     def test_build_command_basic(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd, prompt = provider.build_command(messages)
+        cmd, stdin_prompt = provider.build_command(messages)
 
         assert cmd[0] == "/usr/bin/claude"
         assert "-p" in cmd
         assert "--output-format" in cmd
         assert "json" in cmd
-        assert "Hello!" in prompt
-        # Prompt should NOT be in cmd args (passed via stdin)
-        assert "Hello!" not in cmd
+        # Short prompt — passed as CLI arg, not via stdin
+        assert "Hello!" in cmd
+        assert stdin_prompt is None
 
     def test_build_command_streaming(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd, prompt = provider.build_command(messages, stream=True)
+        cmd, stdin_prompt = provider.build_command(messages, stream=True)
 
         assert "--output-format" in cmd
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "stream-json"
-        assert "Hello!" in prompt
+        assert stdin_prompt is None
 
     def test_build_command_with_model(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd, prompt = provider.build_command(messages, model="sonnet")
+        cmd, stdin_prompt = provider.build_command(messages, model="sonnet")
 
         assert "--model" in cmd
         idx = cmd.index("--model")
@@ -93,11 +93,23 @@ class TestClaudeCodeProvider:
             ChatMessage(role="system", content="Be brief"),
             ChatMessage(role="user", content="Hello!"),
         ]
-        cmd, prompt = provider.build_command(messages)
+        cmd, stdin_prompt = provider.build_command(messages)
 
         assert "--system-prompt" in cmd
         idx = cmd.index("--system-prompt")
         assert cmd[idx + 1] == "Be brief"
+
+    def test_build_command_long_prompt_uses_stdin(self, provider):
+        """Prompts exceeding MAX_CMD_LINE_LENGTH should be passed via stdin."""
+        long_content = "x" * (provider.MAX_CMD_LINE_LENGTH + 100)
+        messages = [ChatMessage(role="user", content=long_content)]
+        cmd, stdin_prompt = provider.build_command(messages)
+
+        # Prompt should NOT be in cmd args
+        assert long_content not in cmd
+        # Prompt should be returned for stdin
+        assert stdin_prompt is not None
+        assert long_content in stdin_prompt
 
     @pytest.mark.asyncio
     async def test_execute_success(self, provider, mock_subprocess_success):

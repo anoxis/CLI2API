@@ -119,25 +119,31 @@ class ClaudeCodeProvider:
         prompt = "\n\n".join(parts)
         return prompt, system_prompt
 
+    # Max safe command line length. Windows CreateProcess limit is 32767,
+    # we use a conservative threshold accounting for other args + system overhead.
+    MAX_CMD_LINE_LENGTH = 30000
+
     def build_command(
         self,
         messages: list[ChatMessage],
         model: Optional[str] = None,
         stream: bool = False,
         **kwargs,
-    ) -> tuple[list[str], str]:
+    ) -> tuple[list[str], Optional[str]]:
         """Build claude CLI command.
 
         Returns:
-            Tuple of (cmd_args, prompt). The prompt is passed via stdin
-            to avoid Windows command line length limits.
+            Tuple of (cmd_args, stdin_prompt_or_none).
+            For short prompts, prompt is included as a CLI argument (stdin_prompt=None).
+            For long prompts, it's passed via stdin to avoid Windows limits.
         """
         prompt, system_prompt = self.format_messages_as_prompt(messages)
 
-        cmd = [
-            str(self.executable_path),
-            "-p",  # Print mode — prompt comes via stdin
-        ]
+        use_stdin = len(prompt) > self.MAX_CMD_LINE_LENGTH
+
+        cmd = [str(self.executable_path), "-p"]
+        if not use_stdin:
+            cmd.append(prompt)
 
         # Output format
         if stream:
@@ -157,7 +163,7 @@ class ClaudeCodeProvider:
         if system_prompt:
             cmd.extend(["--system-prompt", system_prompt])
 
-        return cmd, prompt
+        return cmd, prompt if use_stdin else None
 
     # ==================== Subprocess Utilities ====================
 
@@ -324,10 +330,11 @@ class ClaudeCodeProvider:
         if tools:
             messages = ToolHandler.inject_tools_into_messages(messages, tools)
 
-        cmd, prompt = self.build_command(messages, model=model, stream=False)
+        cmd, stdin_prompt = self.build_command(messages, model=model, stream=False)
 
         try:
-            stdout, _ = await self._run_subprocess(cmd, timeout, stdin_data=prompt.encode())
+            stdin_data = stdin_prompt.encode() if stdin_prompt else None
+            stdout, _ = await self._run_subprocess(cmd, timeout, stdin_data=stdin_data)
         except RuntimeError:
             raise
 
@@ -367,10 +374,11 @@ class ClaudeCodeProvider:
             logger.info(f"Injecting {len(tools)} tools into messages")
             messages = ToolHandler.inject_tools_into_messages(messages, tools)
 
-        cmd, prompt = self.build_command(messages, model=model, stream=True)
-        logger.info(f"Claude stream: model={model}, prompt_len={len(prompt)}")
+        cmd, stdin_prompt = self.build_command(messages, model=model, stream=True)
+        stdin_data = stdin_prompt.encode() if stdin_prompt else None
+        logger.info(f"Claude stream: model={model}, prompt_len={len(stdin_prompt or cmd[2])}, via_stdin={stdin_prompt is not None}")
 
-        proc = await self._create_stream_process(cmd, stdin_data=prompt.encode())
+        proc = await self._create_stream_process(cmd, stdin_data=stdin_data)
 
         tool_parser = StreamingToolParser() if tools else None
         accumulated_content = ""
