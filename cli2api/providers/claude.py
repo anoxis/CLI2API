@@ -125,14 +125,18 @@ class ClaudeCodeProvider:
         model: Optional[str] = None,
         stream: bool = False,
         **kwargs,
-    ) -> list[str]:
-        """Build claude CLI command."""
+    ) -> tuple[list[str], str]:
+        """Build claude CLI command.
+
+        Returns:
+            Tuple of (cmd_args, prompt). The prompt is passed via stdin
+            to avoid Windows command line length limits.
+        """
         prompt, system_prompt = self.format_messages_as_prompt(messages)
 
         cmd = [
             str(self.executable_path),
-            "-p",  # Print mode (non-interactive)
-            prompt,
+            "-p",  # Print mode — prompt comes via stdin
         ]
 
         # Output format
@@ -153,7 +157,7 @@ class ClaudeCodeProvider:
         if system_prompt:
             cmd.extend(["--system-prompt", system_prompt])
 
-        return cmd
+        return cmd, prompt
 
     # ==================== Subprocess Utilities ====================
 
@@ -161,19 +165,27 @@ class ClaudeCodeProvider:
         self,
         cmd: list[str],
         timeout: Optional[int] = None,
+        stdin_data: Optional[bytes] = None,
     ) -> tuple[bytes, bytes]:
-        """Run subprocess with timeout handling."""
+        """Run subprocess with timeout handling.
+
+        Args:
+            cmd: Command and arguments.
+            timeout: Timeout in seconds.
+            stdin_data: Data to send to process stdin (e.g. the prompt).
+        """
         timeout = timeout or self.default_timeout
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE if stdin_data else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
         try:
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
+                proc.communicate(input=stdin_data),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
@@ -189,13 +201,24 @@ class ClaudeCodeProvider:
     async def _create_stream_process(
         self,
         cmd: list[str],
+        stdin_data: Optional[bytes] = None,
     ) -> asyncio.subprocess.Process:
-        """Create subprocess for streaming."""
+        """Create subprocess for streaming.
+
+        Args:
+            cmd: Command and arguments.
+            stdin_data: Data to send to process stdin before streaming output.
+        """
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE if stdin_data else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        if stdin_data and proc.stdin:
+            proc.stdin.write(stdin_data)
+            await proc.stdin.drain()
+            proc.stdin.close()
         logger.info(f"Claude process started: PID={proc.pid}")
         return proc
 
@@ -301,10 +324,10 @@ class ClaudeCodeProvider:
         if tools:
             messages = ToolHandler.inject_tools_into_messages(messages, tools)
 
-        cmd = self.build_command(messages, model=model, stream=False)
+        cmd, prompt = self.build_command(messages, model=model, stream=False)
 
         try:
-            stdout, _ = await self._run_subprocess(cmd, timeout)
+            stdout, _ = await self._run_subprocess(cmd, timeout, stdin_data=prompt.encode())
         except RuntimeError:
             raise
 
@@ -344,10 +367,10 @@ class ClaudeCodeProvider:
             logger.info(f"Injecting {len(tools)} tools into messages")
             messages = ToolHandler.inject_tools_into_messages(messages, tools)
 
-        cmd = self.build_command(messages, model=model, stream=True)
-        logger.info(f"Claude stream: model={model}, prompt_len={len(cmd[2])}")
+        cmd, prompt = self.build_command(messages, model=model, stream=True)
+        logger.info(f"Claude stream: model={model}, prompt_len={len(prompt)}")
 
-        proc = await self._create_stream_process(cmd)
+        proc = await self._create_stream_process(cmd, stdin_data=prompt.encode())
 
         tool_parser = StreamingToolParser() if tools else None
         accumulated_content = ""

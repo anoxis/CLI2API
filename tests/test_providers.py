@@ -61,24 +61,28 @@ class TestClaudeCodeProvider:
 
     def test_build_command_basic(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd = provider.build_command(messages)
+        cmd, prompt = provider.build_command(messages)
 
         assert cmd[0] == "/usr/bin/claude"
         assert "-p" in cmd
         assert "--output-format" in cmd
         assert "json" in cmd
+        assert "Hello!" in prompt
+        # Prompt should NOT be in cmd args (passed via stdin)
+        assert "Hello!" not in cmd
 
     def test_build_command_streaming(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd = provider.build_command(messages, stream=True)
+        cmd, prompt = provider.build_command(messages, stream=True)
 
         assert "--output-format" in cmd
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "stream-json"
+        assert "Hello!" in prompt
 
     def test_build_command_with_model(self, provider):
         messages = [ChatMessage(role="user", content="Hello!")]
-        cmd = provider.build_command(messages, model="sonnet")
+        cmd, prompt = provider.build_command(messages, model="sonnet")
 
         assert "--model" in cmd
         idx = cmd.index("--model")
@@ -89,7 +93,7 @@ class TestClaudeCodeProvider:
             ChatMessage(role="system", content="Be brief"),
             ChatMessage(role="user", content="Hello!"),
         ]
-        cmd = provider.build_command(messages)
+        cmd, prompt = provider.build_command(messages)
 
         assert "--system-prompt" in cmd
         idx = cmd.index("--system-prompt")

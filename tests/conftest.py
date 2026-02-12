@@ -116,7 +116,7 @@ def sample_messages():
 def mock_subprocess_success():
     """Mock successful subprocess execution."""
 
-    async def mock_communicate():
+    async def mock_communicate(input=None):
         return (
             json.dumps(
                 {
@@ -158,8 +158,19 @@ def mock_subprocess_stream():
             self.index += 1
             return line
 
+    class MockStdin:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
     mock_proc = AsyncMock()
     mock_proc.stdout = MockStdout()
+    mock_proc.stdin = MockStdin()
     mock_proc.returncode = None
     mock_proc.kill = MagicMock()
     mock_proc.wait = AsyncMock()
